@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 408" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+  <rect width="980" height="408" fill="#ffffff"/>
+  <defs><marker id="arr" markerWidth="7" markerHeight="7" refX="6" refY="2.5" orient="auto"><path d="M0,0 L6,2.5 L0,5 Z" fill="#64748b"/></marker></defs>
+  <text x="20" y="30" font-size="17" font-weight="700" fill="#1f2937">ETL 十步流水线：两段 · 每步 AI 是谁 · 交什么 · 我怎么验收</text>
+  <text x="20" y="56" font-size="10.5" font-weight="700" fill="#1d4ed8">第一段 · 数据段（第 0–5 步）——把原始导出变成可入库、可对账、能解释的数据</text>
+  <rect x="20" y="66" width="150" height="92" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+  <text x="95" y="88" font-size="11.5" font-weight="700" fill="#1d4ed8" text-anchor="middle">输入</text>
+  <text x="95" y="108" font-size="9.5" fill="#1e40af" text-anchor="middle">系统导出 · 字典</text>
+  <text x="95" y="124" font-size="9.5" fill="#1e40af" text-anchor="middle">指标库</text>
+  <text x="95" y="142" font-size="8.5" fill="#3b82f6" text-anchor="middle">对照材料只对照、不进库</text>
+  <g>
+    <rect x="190" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="206" cy="85" r="9" fill="#2563eb"/>
+    <text x="206" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">0</text>
+    <text x="220" y="89" font-size="11.5" font-weight="700" fill="#1f2937">接数据与建档</text>
+    <text x="199" y="111" font-size="9" fill="#64748b">数据接入工程师</text>
+    <text x="199" y="128" font-size="9" fill="#334155">交：台账 · run.json</text>
+    <text x="199" y="143" font-size="9" fill="#334155">　　批次目录</text>
+  </g>
+  <line x1="305" y1="112.0" x2="319" y2="112.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="320" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="336" cy="85" r="9" fill="#2563eb"/>
+    <text x="336" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+    <text x="350" y="89" font-size="11.5" font-weight="700" fill="#1f2937">剖析</text>
+    <text x="329" y="111" font-size="9" fill="#64748b">数据质量工程师</text>
+    <text x="329" y="128" font-size="9" fill="#334155">交：剖析报告</text>
+    <text x="329" y="143" font-size="9" fill="#334155">　　异常＋行号</text>
+  </g>
+  <line x1="435" y1="112.0" x2="449" y2="112.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="450" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="466" cy="85" r="9" fill="#2563eb"/>
+    <text x="466" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+    <text x="480" y="89" font-size="11.5" font-weight="700" fill="#1f2937">诊断分类</text>
+    <text x="459" y="111" font-size="9" fill="#64748b">数据治理顾问</text>
+    <text x="459" y="128" font-size="9" fill="#334155">交：分类表（三问）</text>
+    <text x="459" y="143" font-size="9" fill="#334155">　　待访谈清单</text>
+  </g>
+  <line x1="565" y1="112.0" x2="579" y2="112.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="580" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="596" cy="85" r="9" fill="#2563eb"/>
+    <text x="596" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+    <text x="610" y="89" font-size="11.5" font-weight="700" fill="#1f2937">清洗规则</text>
+    <text x="589" y="111" font-size="9" fill="#64748b">数据治理顾问</text>
+    <text x="589" y="128" font-size="9" fill="#334155">交：规则 YAML</text>
+    <text x="589" y="143" font-size="9" fill="#334155">　　映射表 · 标签表</text>
+  </g>
+  <line x1="695" y1="112.0" x2="709" y2="112.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="710" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="726" cy="85" r="9" fill="#2563eb"/>
+    <text x="726" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+    <text x="740" y="89" font-size="11.5" font-weight="700" fill="#1f2937">导入与对账</text>
+    <text x="719" y="111" font-size="9" fill="#64748b">ETL／数仓工程师</text>
+    <text x="719" y="128" font-size="9" fill="#334155">交：导入库</text>
+    <text x="719" y="143" font-size="9" fill="#334155">　　对账报告 · 隔离</text>
+  </g>
+  <line x1="825" y1="112.0" x2="839" y2="112.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="840" y="66" width="114" height="92" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+    <circle cx="856" cy="85" r="9" fill="#2563eb"/>
+    <text x="856" y="89" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+    <text x="870" y="89" font-size="11.5" font-weight="700" fill="#1f2937">覆盖与回答</text>
+    <text x="849" y="111" font-size="9" fill="#64748b">数据交付顾问</text>
+    <text x="849" y="128" font-size="9" fill="#334155">交：覆盖说明</text>
+    <text x="849" y="143" font-size="9" fill="#334155">　　三段式回答</text>
+  </g>
+  <line x1="20" y1="186" x2="960" y2="186" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4"/>
+  <rect x="270" y="173" width="440" height="26" rx="13" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="490" y="190" font-size="10" fill="#475569" text-anchor="middle">交接物：清洗后的表 ＋ 对账报告 ＋ 隔离明细 ＋ 访谈证据</text>
+  <text x="20" y="238" font-size="10.5" font-weight="700" fill="#047857">第二段 · 数据之后（第 6–9 步）——把数据变成别人敢用的结论：先问清、再改模型、写清边界、最后交付</text>
+  <rect x="20" y="250" width="150" height="92" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
+  <text x="95" y="272" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">输入</text>
+  <text x="95" y="292" font-size="9.5" fill="#065f46" text-anchor="middle">上一段产出</text>
+  <text x="95" y="308" font-size="9.5" fill="#065f46" text-anchor="middle">＋ 访谈与业务目标</text>
+  <text x="95" y="326" font-size="8.5" fill="#059669" text-anchor="middle">证据不足的标待核、不硬写</text>
+  <g>
+    <rect x="190" y="250" width="114" height="92" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <circle cx="206" cy="269" r="9" fill="#059669"/>
+    <text x="206" y="273" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">6</text>
+    <text x="220" y="273" font-size="11.5" font-weight="700" fill="#1f2937">访谈核实</text>
+    <text x="199" y="295" font-size="9" fill="#64748b">数据治理顾问</text>
+    <text x="199" y="312" font-size="9" fill="#334155">交：访谈稿 · 总账</text>
+    <text x="199" y="327" font-size="9" fill="#334155">　　导出＋哈希</text>
+  </g>
+  <line x1="305" y1="296.0" x2="319" y2="296.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="320" y="250" width="114" height="92" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <circle cx="336" cy="269" r="9" fill="#059669"/>
+    <text x="336" y="273" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">7</text>
+    <text x="350" y="273" font-size="11.5" font-weight="700" fill="#1f2937">模型与指标</text>
+    <text x="329" y="295" font-size="9" fill="#64748b">数据治理顾问</text>
+    <text x="329" y="312" font-size="9" fill="#334155">交：两份修订记录</text>
+    <text x="329" y="327" font-size="9" fill="#334155">　　指标库（ID 不变）</text>
+  </g>
+  <line x1="435" y1="296.0" x2="449" y2="296.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="450" y="250" width="114" height="92" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <circle cx="466" cy="269" r="9" fill="#059669"/>
+    <text x="466" y="273" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">8</text>
+    <text x="480" y="273" font-size="11.5" font-weight="700" fill="#1f2937">诊断报告</text>
+    <text x="459" y="295" font-size="9" fill="#64748b">数据质量分析师</text>
+    <text x="459" y="312" font-size="9" fill="#334155">交：六章报告</text>
+    <text x="459" y="327" font-size="9" fill="#334155">　　四类分开</text>
+  </g>
+  <line x1="565" y1="296.0" x2="579" y2="296.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g>
+    <rect x="580" y="250" width="114" height="92" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+    <circle cx="596" cy="269" r="9" fill="#059669"/>
+    <text x="596" y="273" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">9</text>
+    <text x="610" y="273" font-size="11.5" font-weight="700" fill="#1f2937">demo 与交付</text>
+    <text x="589" y="295" font-size="9" fill="#64748b">数据交付顾问</text>
+    <text x="589" y="312" font-size="9" fill="#334155">交：运行记录 · 标注</text>
+    <text x="589" y="327" font-size="9" fill="#334155">　　预检 · 提交包</text>
+  </g>
+  <line x1="696" y1="296.0" x2="706" y2="296.0" stroke="#64748b" stroke-width="1.4" marker-end="url(#arr)"/>
+  <rect x="710" y="250" width="146" height="92" rx="8" fill="#fffbeb" stroke="#fcd34d" stroke-width="1.5"/>
+  <text x="783" y="272" font-size="11.5" font-weight="700" fill="#b45309" text-anchor="middle">交付</text>
+  <text x="783" y="294" font-size="9" fill="#92400e" text-anchor="middle">可重跑 · 可回溯</text>
+  <text x="783" y="310" font-size="9" fill="#92400e" text-anchor="middle">每个数都有出处</text>
+  <text x="783" y="326" font-size="9" fill="#92400e" text-anchor="middle">每个缺口写在数旁</text>
+  <text x="20" y="378" font-size="10" fill="#475569">每步验收同一套路：先跑断言（机器判）→ 独立检查者复查（新会话，只给证据不给代码）→ 我只抽 3 条最不像的</text>
+  <text x="20" y="396" font-size="10" fill="#b45309">数据段的错会静默留在数里；数据之后的错会静默留在话里——后者更贵，因为它会被当结论用</text>
+</svg>

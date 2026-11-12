@@ -1,0 +1,30 @@
+# 系统垃圾
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 绝不提交客户数据（本包只放方法与模板）
+data/
+raw/
+*.csv
+*.xlsx
+*.xls
+*.duckdb
+*.db
+*.sqlite
+!04-进度台账模板.md
+
+# 项目运行时
+.runtime/
+output/
+*.zip
+
+# 密钥
+.env
+*.key
+*secret*
