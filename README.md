@@ -1,5 +1,7 @@
 # etl-utils · 我的 ETL 工作包
 
+> 仓库：https://github.com/as569951728/etl-utils（private）　·　本地目录：`~/czw-code/etl-utils`
+
 > 一句话：**换项目时 clone 这个包，AI 就知道该怎么带我做完一单 ETL**——不用每次交代文件在哪、也不用依赖上一次会话的上下文。
 
 ## 包里有什么
