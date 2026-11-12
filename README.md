@@ -1,4 +1,4 @@
-# etl-kit · 我的 ETL 工作包
+# etl-utils · 我的 ETL 工作包
 
 > 一句话：**换项目时 clone 这个包，AI 就知道该怎么带我做完一单 ETL**——不用每次交代文件在哪、也不用依赖上一次会话的上下文。
 
@@ -21,16 +21,16 @@
 
 ```sh
 cd /path/to/new-project
-git clone <本仓库地址> .etl-kit
+git clone https://github.com/as569951728/etl-utils.git .etl-utils
 ```
 
 然后在该项目根的 `AGENTS.md`（没有就新建）里加一行：
 
 ```
-ETL 工具包在 .etl-kit/，按它的 README 与 AGENTS.md 执行；出定制手册前先读 03。
+ETL 工具包在 .etl-utils/，按它的 README 与 AGENTS.md 执行；出定制手册前先读 03。
 ```
 
-接着对 AI 说：**"读 .etl-kit，给这个客户出一份 ETL 手册"**——它会先起草四格背景给你确认，再生成手册。
+接着对 AI 说：**"读 .etl-utils，给这个客户出一份 ETL 手册"**——它会先起草四格背景给你确认，再生成手册。
 
 **② 同一个项目，每天接着干**
 
