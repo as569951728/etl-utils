@@ -28,7 +28,15 @@ from pathlib import Path
 # ---------- 定位批次 ----------
 BATCH = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("artifacts/current")
 BATCH = BATCH.resolve()
-ROOT = BATCH.parents[1] if BATCH.parent.name == "artifacts" else BATCH.parent
+
+def _find_project_root(batch: Path) -> Path:
+    """向上最多 4 层找含 data/raw 的目录；找不到就按常规布局猜。"""
+    for base in [batch.parent, *list(batch.parents)[1:5]]:
+        if (base / "data" / "raw").exists():
+            return base
+    return batch.parents[1] if batch.parent.name == "artifacts" else batch.parent
+
+ROOT = _find_project_root(BATCH)
 RAW_DIR = ROOT / "data" / "raw"
 
 # ---------- 断言注册表 ----------
@@ -603,7 +611,22 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
         sys.exit(selftest())
 
-    fails = 0
+    if not BATCH.exists():
+        print(f"✗ 批次目录不存在：{BATCH}")
+        print("  用法：python3 check.py <批次目录>，例：artifacts/b01-20261113")
+        print("  不知道批次在哪：python3 check.py --status")
+        sys.exit(2)
+
+    markers = ("run.json", "profile", "cleaning", "reports", "reconcile", "metrics", "delivery")
+    if not any((BATCH / m).exists() for m in markers):
+        print(f"✗ 这个目录不像批次目录（没有 {'／'.join(markers)} 中任何一个）：{BATCH}")
+        subs = sorted(p.name for p in BATCH.iterdir() if p.is_dir())[:6]
+        if subs:
+            print(f"  它下面有：{subs}")
+            print("  是不是想传其中某一个？例：artifacts/<批次名>")
+        sys.exit(2)
+
+    fails = passed = skipped = 0
     print(f"批次: {BATCH}")
     print("-" * 64)
     for stage, name, fn in CHECKS:
@@ -618,11 +641,22 @@ def main():
         else:
             ok, detail = r
             status = "PASS" if ok else "FAIL"
-            if not ok:
+            if ok:
+                passed += 1
+            else:
                 fails += 1
+        if status == "SKIP":
+            skipped += 1
         print(f"{status:4}  {stage}  {name}  {detail}")
     print("-" * 64)
-    print("结果:", "全部通过（SKIP 为未到阶段）" if fails == 0 else f"{fails} 条 FAIL，打回重做")
+    if fails:
+        print("结果:", f"{fails} 条 FAIL，打回重做")
+    elif passed == 0:
+        print(f"⚠ 0 条通过、{skipped} 条跳过——**没有任何断言真正执行**")
+        print("  多半是产物还没生成，或者路径指到了别的批次。先跑 --status 确认。")
+        sys.exit(2)
+    else:
+        print("结果:", f"{passed} 条通过" + (f"、{skipped} 条跳过（未到那一步）" if skipped else ""))
     sys.exit(1 if fails else 0)
 
 if __name__ == "__main__":

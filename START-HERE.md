@@ -91,7 +91,7 @@ python3 .etl-utils/check.py --status
 | --- | --- |
 | 十步长什么样 | `全景图-十步.svg` |
 | 这套东西的设计取舍 | `README.md` |
-| 完整方法论与指令 | `01-通用手册.md`（1700 行，别通读，用编号搜） |
+| 完整方法论与指令 | `01-通用手册.md`（1700 多行，别通读，用编号搜） |
 
 ---
 
@@ -115,6 +115,10 @@ python3 .etl-utils/check.py --status
 | 跑断言（某一步做完后） | `python3 .etl-utils/check.py <批次目录>` |
 | 校验工具包自身没坏 | `python3 .etl-utils/check.py --selftest` |
 | 更新工具包 | `cd .etl-utils && git pull` |
+
+**退出码怎么看**：`0` 通过（可能有 SKIP，属未到那一步）｜`1` 有 FAIL，修完再交｜`2` 路径或产物不对，先跑 `--status`。
+
+> 上面用 `.etl-utils` 作目录名。你 clone 到别处也行，命令里的路径跟着换即可。
 
 ---
 
