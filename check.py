@@ -255,11 +255,21 @@ def _():
 #   - 覆盖说明里每个数字都能在对账报告里找到
 
 # ================= 第 7 步：指标 =================
-METRICS_RUN = BATCH / "reports" / "metrics_run.json"
+# 不绑定具体文件名/字段名：三个常见落位都试，字段按"数值字段"识别
+METRICS_CANDIDATES = [
+    BATCH / "reports" / "metrics_run.json",
+    BATCH / "metrics" / "metrics_run.json",
+    BATCH / "metrics_run.json",
+]
+MAJOR_UNITS = ("元", "万元", "千元", "亿元", "美元")  # 主单位；最小单位（分／cent）不在其中
 
-@check("7指标", "金额指标 unit 与 value 同单位（value/display≈100 时 unit 必须是「分」）")
+@check("7指标", "unit 描述的是 value（同一指标里出现 10/100/1000 倍的双数值且 unit 标主单位＝错位）")
 def _():
-    d = load_json(METRICS_RUN)
+    d = None
+    for p in METRICS_CANDIDATES:
+        d = load_json(p)
+        if d:
+            break
     if not d:
         return None
     items = d.get("metrics") if isinstance(d, dict) else d
@@ -270,29 +280,61 @@ def _():
     for m in items:
         if not isinstance(m, dict):
             continue
-        v, disp, unit = m.get("value"), m.get("value_display"), str(m.get("unit") or "")
-        if not isinstance(v, (int, float)) or not isinstance(disp, (int, float)) or not disp:
+        unit = str(m.get("unit") or "")
+        nums = {k: v for k, v in m.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if len(nums) < 2:
             continue
         checked += 1
-        # value 与展示值差 100 倍 → 两者单位不同，unit 只能描述 value
-        if abs(v / disp - 100) < 0.01 and "分" not in unit:
-            bad.append(f"{m.get('id')}: value={v}、display={disp} 差 100 倍，unit 却写「{unit}」")
+        keys = list(nums)
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                a, b = nums[keys[i]], nums[keys[j]]
+                if not a or not b or a == b:
+                    continue
+                ratio = max(abs(a), abs(b)) / min(abs(a), abs(b))
+                for p in (10, 100, 1000):
+                    if abs(ratio - p) < 0.01 and any(u in unit for u in MAJOR_UNITS):
+                        big, small = (keys[i], keys[j]) if abs(a) > abs(b) else (keys[j], keys[i])
+                        bad.append(f"{m.get('id')}: {big}={max(abs(a), abs(b))} 与 {small}={min(abs(a), abs(b))} 差 {p} 倍，unit 却是「{unit}」")
+                        break
     if checked == 0:
         return None
     if bad:
-        return False, "；".join(bad[:3]) + "　→ value 存的是分，unit 就写「分」，展示值另设 display_unit"
-    return True, f"{checked} 项带展示值，单位一致"
+        seen, uniq = set(), []
+        for x in bad:
+            k = x.split(":")[0]
+            if k not in seen:
+                seen.add(k); uniq.append(x)
+        return False, ("；".join(uniq[:3])
+                       + "　→ unit 只能描述 value；两个形态各带各的单位（若这两个字段本就是不同量，忽略本条）")
+    return True, f"{checked} 项含多个数值字段，未发现单位错位"
 
 # ---------- 辅助模式：--status 看进度 ／ --selftest 自检工具包 ----------
+def _is_archive(p: Path) -> bool:
+    return "归档" in p.name or "-v1." in p.name or "-v2." in p.name or "-v3." in p.name
+
+def _looks_like_ledger(p: Path) -> bool:
+    """不靠文件名判断：内容里有『步 / 状态 / 下一步』的表头就算进度表。"""
+    try:
+        head = p.read_text(encoding="utf-8", errors="ignore")[:30000]
+    except Exception:
+        return False
+    return "| 步" in head and "状态" in head and "下一步" in head
+
 def _find_project_doc():
-    """在当前目录（及上一级）找项目手册或台账；跳过归档版。"""
+    """先按常见命名找；找不到就扫当前目录所有 md，按内容识别。"""
+    named = []
     for base in (Path.cwd(), Path.cwd().parent):
-        for pat in ("*ETL工作手册*.md", "ETL-进度台账*.md"):
-            for p in sorted(base.glob(pat)):
-                if "归档" in p.name or "-v1." in p.name or "-v2." in p.name:
-                    continue
-                return p
-    return None
+        for pat in ("*工作手册*.md", "*进度台账*.md", "*ETL*.md"):
+            named += [p for p in sorted(base.glob(pat)) if not _is_archive(p)]
+    for p in named:
+        if _looks_like_ledger(p):
+            return p
+    for p in sorted(Path.cwd().glob("*.md")):        # 名字完全自定义时也能找到
+        if not _is_archive(p) and _looks_like_ledger(p):
+            return p
+    return named[0] if named else None
 
 def _parse_ledger(p: Path):
     """从手册里解析台账表：返回 [[步, 名称, 状态, 判据, 产出物, 下一步], ...]"""
