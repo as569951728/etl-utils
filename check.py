@@ -230,8 +230,180 @@ def _():
 #   - time_range 与数据实际 min/max 一致
 #   - 覆盖说明里每个数字都能在对账报告里找到
 
+# ================= 第 7 步：指标 =================
+METRICS_RUN = BATCH / "reports" / "metrics_run.json"
+
+@check("7指标", "金额指标 unit 与 value 同单位（value/display≈100 时 unit 必须是「分」）")
+def _():
+    d = load_json(METRICS_RUN)
+    if not d:
+        return None
+    items = d.get("metrics") if isinstance(d, dict) else d
+    if not isinstance(items, list) or not items:
+        return None
+
+    bad, checked = [], 0
+    for m in items:
+        if not isinstance(m, dict):
+            continue
+        v, disp, unit = m.get("value"), m.get("value_display"), str(m.get("unit") or "")
+        if not isinstance(v, (int, float)) or not isinstance(disp, (int, float)) or not disp:
+            continue
+        checked += 1
+        # value 与展示值差 100 倍 → 两者单位不同，unit 只能描述 value
+        if abs(v / disp - 100) < 0.01 and "分" not in unit:
+            bad.append(f"{m.get('id')}: value={v}、display={disp} 差 100 倍，unit 却写「{unit}」")
+    if checked == 0:
+        return None
+    if bad:
+        return False, "；".join(bad[:3]) + "　→ value 存的是分，unit 就写「分」，展示值另设 display_unit"
+    return True, f"{checked} 项带展示值，单位一致"
+
+# ---------- 辅助模式：--status 看进度 ／ --selftest 自检工具包 ----------
+def _find_project_doc():
+    """在当前目录（及上一级）找项目手册或台账；跳过归档版。"""
+    for base in (Path.cwd(), Path.cwd().parent):
+        for pat in ("*ETL工作手册*.md", "ETL-进度台账*.md"):
+            for p in sorted(base.glob(pat)):
+                if "归档" in p.name or "-v1." in p.name or "-v2." in p.name:
+                    continue
+                return p
+    return None
+
+def _parse_ledger(p: Path):
+    """从手册里解析台账表：返回 [[步, 名称, 状态, 判据, 产出物, 下一步], ...]"""
+    rows, inside = [], False
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.startswith("|") and "步" in line and "状态" in line and "下一步" in line:
+            inside = True
+            continue
+        if inside:
+            if not line.startswith("|"):
+                break
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 6 and cells[0].isdigit():
+                rows.append(cells)
+    return rows
+
+def show_status():
+    doc = _find_project_doc()
+    if doc is None:
+        print("没有找到项目手册或台账。")
+        print("→ 新项目：按 START-HERE.md 的 A 段开始；")
+        print("→ 已有项目：cd 到项目根（有 artifacts/ 的那一层）再跑一次。")
+        return 0
+
+    text = doc.read_text(encoding="utf-8")
+    ver = ""
+    for line in text.splitlines()[:8]:
+        if "版本" in line and "v" in line:
+            ver = line.strip().lstrip("> ").replace("**", "")
+            break
+    rows = _parse_ledger(doc)
+
+    print(f"项目文档：{doc.name}")
+    if ver:
+        print(f"　{ver[:90]}")
+    if not rows:
+        print("　⚠ 没解析到台账表（表头需含『步 / 状态 / 下一步』）。")
+        return 0
+
+    done = [r for r in rows if "✅" in r[2]]
+    print(f"进度：{len(done)}/{len(rows)} 步完成")
+    print("-" * 60)
+    for r in rows:
+        mark = r[2][:2]
+        print(f"  {r[0]:>2}  {r[1]:<14} {mark}  {r[5][:30]}")
+    print("-" * 60)
+
+    pending = next((r for r in rows if "✅" not in r[2]), None)
+    if pending is None:
+        print("下一步：十步已全部完成 → 做交付与复盘（或按变更记录继续维护）。")
+        return 0
+
+    step = int(pending[0])
+    paths = [s.strip("` ") for s in pending[4].replace("；", ";").split(";") if s.strip()]
+    present = [pth for pth in paths if Path(pth).exists()]
+    missing = [pth for pth in paths if not Path(pth).exists()]
+
+    if "⬜" in pending[2]:
+        cmd = ("C0-B ＋ C0-T（建批次目录与 run.json；若台账没写先补 C0-A）"
+               if step == 0 else f"C{step}-A ＋ C{step}-A2")
+        print(f"下一步：第 {step} 步「{pending[1]}」还没开始 → 发 {cmd}")
+    elif "⛔" in pending[2]:
+        print(f"下一步：第 {step} 步「{pending[1]}」阻塞 {pending[2].lstrip('⛔').strip()}")
+        print("　先解决缺件／等回话，不要往下推进。")
+    else:  # 🟡 进行中
+        print(f"下一步：第 {step} 步「{pending[1]}」进行中")
+        if missing:
+            print(f"　产物还没齐（缺 {len(missing)} 个）→ 先把第 {step} 步做完，别急着发下一步")
+        else:
+            print("　产物已在 → 对照定制手册的验收节补跑断言、勾判据；勾满再发 " + pending[5])
+
+    for pth in paths:
+        print(f"　预期产物：{pth}  {'✓ 在' if Path(pth).exists() else '✗ 不存在'}")
+    return 0
+
+def selftest():
+    base = Path(__file__).parent
+    need = ["README.md", "START-HERE.md", "AGENTS.md", "01-通用手册.md",
+            "02-知识库-K1-K11.md", "03-生成定制手册话术.md", "04-进度台账模板.md",
+            "check.py", "全景图-十步.svg", "LICENSE"]
+    must_have = {
+        "AGENTS.md": ["五条铁律", "一次只做一步", "遇到新情况先报影响面", "回溯件已生成"],
+        "01-通用手册.md": ["验收四件套", "查回溯件", "中途变了怎么办", "必须停下来", "字段验"],
+        "03-生成定制手册话术.md": ["我做四件事", "必留的回溯件", "只验数不验回溯", "手册是活文档"],
+        "START-HERE.md": ["--status", "先跑一条命令"],
+    }
+    fails = []
+    print(f"工具包自检：{base}")
+    print("-" * 60)
+
+    missing = [f for f in need if not (base / f).exists()]
+    print(f"{'PASS' if not missing else 'FAIL'}  必备文件 {len(need) - len(missing)}/{len(need)}"
+          + ("" if not missing else f"  缺: {missing}"))
+    if missing:
+        fails.append("必备文件")
+
+    for f in sorted(base.glob("*.md")):
+        lines = f.read_text(encoding="utf-8").splitlines()
+        fences = sum(1 for l in lines if l.strip().startswith("```"))
+        if fences % 2:
+            fails.append(f"{f.name} 代码块未闭合")
+            print(f"FAIL  {f.name} 代码块 {fences} 个（应为偶数）")
+    print(f"{'PASS' if not any('代码块' in x for x in fails) else 'FAIL'}  代码块配对")
+
+    for f, kws in must_have.items():
+        p = base / f
+        if not p.exists():
+            continue
+        text = p.read_text(encoding="utf-8")
+        lost = [k for k in kws if k not in text]
+        print(f"{'PASS' if not lost else 'FAIL'}  {f} 关键约束 {len(kws) - len(lost)}/{len(kws)}"
+              + ("" if not lost else f"  缺: {lost}"))
+        if lost:
+            fails.append(f"{f} 关键约束")
+
+    ver_ok = False
+    p01 = base / "01-通用手册.md"
+    if p01.exists():
+        head = p01.read_text(encoding="utf-8").splitlines()[:5]
+        ver_ok = any("版本 v" in l for l in head)
+    print(f"{'PASS' if ver_ok else 'FAIL'}  01 顶部有版本号")
+    if not ver_ok:
+        fails.append("版本号")
+
+    print("-" * 60)
+    print("结果:", "全部通过" if not fails else f"{len(fails)} 项有问题：{fails}")
+    return 1 if fails else 0
+
 # ---------- 跑灯表 ----------
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--status":
+        sys.exit(show_status())
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+        sys.exit(selftest())
+
     fails = 0
     print(f"批次: {BATCH}")
     print("-" * 64)
