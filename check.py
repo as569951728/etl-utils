@@ -524,8 +524,33 @@ def show_status():
 
     step = int(pending[0])
     paths = [s.strip("` ") for s in pending[4].replace("；", ";").split(";") if s.strip()]
-    present = [pth for pth in paths if Path(pth).exists()]
-    missing = [pth for pth in paths if not Path(pth).exists()]
+
+    # 产出物列常混两种写法：全路径 artifacts/<批次>/x，和相对批次简写 profile/x。
+    # 先从业已出现的全路径里推出批次前缀，再拿它去补简写；都对不上才算缺。
+    prefix = None
+    for pth in paths:
+        m = re.match(r"^(artifacts/[^/]+)/", pth)
+        if m:
+            prefix = m.group(1)
+            break
+    if prefix is None:
+        cands = sorted((Path.cwd() / "artifacts").glob("*"), key=lambda x: x.stat().st_mtime, reverse=True) \
+            if (Path.cwd() / "artifacts").is_dir() else []
+        if cands:
+            prefix = f"artifacts/{cands[0].name}"
+
+    def resolve(pth):
+        tries = [Path(pth)]
+        if prefix and not pth.startswith("artifacts/"):
+            tries.append(Path(prefix) / pth)
+        return next((t for t in tries if t.exists()), None)
+
+    shown = []
+    for pth in paths:
+        hit = resolve(pth)
+        shown.append((hit.as_posix() if hit else pth, bool(hit)))
+    present = [x for x, ok in shown if ok]
+    missing = [x for x, ok in shown if not ok]
 
     if "⬜" in pending[2]:
         cmd = ("C0-B ＋ C0-T（建批次目录与 run.json；若台账没写先补 C0-A）"
@@ -541,8 +566,8 @@ def show_status():
         else:
             print("　产物已在 → 对照定制手册的验收节补跑断言、勾判据；勾满再发 " + pending[5])
 
-    for pth in paths:
-        print(f"　预期产物：{pth}  {'✓ 在' if Path(pth).exists() else '✗ 不存在'}")
+    for pth, ok in shown:
+        print(f"　预期产物：{pth}  {'✓ 在' if ok else '✗ 不存在'}")
     return 0
 
 def selftest():
@@ -551,10 +576,12 @@ def selftest():
             "02-知识库-K1-K11.md", "03-生成定制手册话术.md", "04-进度台账模板.md",
             "check.py", "全景图-十步.svg", "LICENSE"]
     must_have = {
+        "README.md": ["先看清，再动手", "行数对，不等于值对", "不知道的不估算", "第一次用：头一小时怎么过",
+                      "按它的 AGENTS.md 执行"],
         "AGENTS.md": ["五条铁律", "一次只做一步", "遇到新情况先报影响面", "回溯件已生成"],
         "01-通用手册.md": ["验收四件套", "查回溯件", "中途变了怎么办", "必须停下来", "字段验"],
         "03-生成定制手册话术.md": ["我做四件事", "必留的回溯件", "只验数不验回溯", "手册是活文档"],
-        "START-HERE.md": ["--status", "先跑一条命令"],
+        "START-HERE.md": ["--status", "先跑一条命令", "按它的 AGENTS.md 执行"],
     }
     fails = []
     print(f"工具包自检：{base}")
