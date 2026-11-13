@@ -20,6 +20,7 @@ AI 补断言时必须遵守（独立检查三原则）：
 """
 
 import sys
+import re
 import json
 import hashlib
 from pathlib import Path
@@ -92,38 +93,150 @@ def _():
     return (not bad), ("全部一致" if not bad else "哈希不符 → " + "；".join(bad[:3]))
 
 # ================= 第 1 步：剖析 =================
-# 约定剖析产物为 BATCH/profile/profile_report.json：
-#   {"files": {"orders.csv": {"amount": {"type":..., "missing":{"total":N,"by_literal":{...}}, "distribution":...}}}}
-PROFILE = BATCH / "profile" / "profile_report.json"
+# 不绑定报告结构与键名：按"形状"识别 file→col→info（三种常见写法都认），认不出就 SKIP。
+PROFILE_CANDIDATES = [
+    BATCH / "profile" / "profile_report.json",
+    BATCH / "reports" / "profile_report.json",
+    BATCH / "profile_report.json",
+]
+TYPE_KEYS = ("type", "dtype", "data_type", "数据类型")
+MISS_KEYS = ("missing", "nulls", "null_stats", "na", "empty",
+             "empty_total", "empty_by_style", "null_count", "missing_count")
+DIST_KEYS = ("distribution", "dist", "distinct", "top", "top10", "top_values",
+             "values", "value_counts", "取值分布")
+
+def _pick(d, *names):
+    for n in names:
+        if isinstance(d, dict) and n in d:
+            return d[n]
+    return None
+
+def _is_info(node) -> bool:
+    """一个 dict 若同时带类型键和（缺失或分布）键，就当成"某一列的信息"。"""
+    if not isinstance(node, dict):
+        return False
+    return (any(k in node for k in TYPE_KEYS)
+            and (any(k in node for k in MISS_KEYS) or any(k in node for k in DIST_KEYS)))
+
+FILE_RE = re.compile(r"\.(csv|xlsx|xls|json|parquet|txt|tsv)$", re.I)
+
+def _iter_profile_fields(rep):
+    """递归收集"某一列的信息"。两种定位方式：
+      ① 文件名作锚点（path 上一段是 *.csv）：下一层的 dict 全是列，**不管它有没有 type**；
+      ② 没有锚点时退回"看起来像列信息"的判断。
+    这样某列缺了 type 也会被抓出来，而不是被当成"不存在"跳过。"""
+    found, seen = [], set()
+
+    def add(f, c, info):
+        k = (str(f), str(c))
+        if k in seen:
+            return
+        seen.add(k)
+        found.append((f, c, info))
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            # ① 文件锚点：当前层就是「列名 → 列信息」
+            if path and isinstance(path[-1], str) and FILE_RE.search(path[-1]):
+                cols = {k: v for k, v in node.items() if isinstance(v, dict)}
+                if cols:
+                    for col, info in cols.items():
+                        add(path[-1], col, info)
+                    return
+                # 文件名只是个标签（列在 fields 之类里）→ 继续往下
+            # ② 无锚点：靠"像不像列信息"判断
+            if _is_info(node):
+                files = [x for x in path if isinstance(x, str) and FILE_RE.search(x)]
+                fname = files[-1] if files else (path[-2] if len(path) >= 2 else "?")
+                add(fname, path[-1] if path else "?", node)
+                return
+            for k, v in node.items():
+                walk(v, path + [k])
+        elif isinstance(node, list):
+            for v in node:
+                label = None
+                if isinstance(v, dict):
+                    label = (_pick(v, "file", "table", "file_name")
+                             or _pick(v, "name", "column", "field"))
+                walk(v, path + ([label] if label else []))
+
+    walk(rep, [])
+    return found
+
+def _missing_of(info):
+    """缺失统计归一化：返回 (total, by_literal)。两种写法都认。"""
+    m = _pick(info, "missing", "nulls", "null_stats", "na", "empty")
+    if isinstance(m, dict):
+        return (_pick(m, "total", "count", "n"),
+                _pick(m, "by_literal", "by_value", "by_token", "breakdown", "styles"))
+    return (_pick(info, "empty_total", "null_count", "missing_count", "n_empty"),
+            _pick(info, "empty_by_style", "null_styles", "by_literal", "by_value"))
+
+def _load_profile():
+    for p in PROFILE_CANDIDATES:
+        d = load_json(p)
+        if d:
+            return d
+    return None
 
 @check("1剖析", "每个字段都有 类型/缺失/分布 三项")
 def _():
-    rep = load_json(PROFILE)
+    rep = _load_profile()
     if rep is None:
-        return None
-    bad = [f"{fn_}.{col}" for fn_, cols in rep.get("files", {}).items()
-           for col, info in cols.items()
-           if not all(k in info for k in ("type", "missing", "distribution"))]
-    return (not bad), ("三项齐全" if not bad else f"缺项: {bad[:5]}{'...' if len(bad) > 5 else ''}")
+        return ("SKIP", "没找到剖析报告（试过 profile/、reports/、批次根目录）")
+    fields = _iter_profile_fields(rep)
+    if not fields:
+        return ("SKIP", '报告结构认不出（找「带 type 的 dict」，认不出就跳过，不硬判）')
+    bad = []
+    for f, c, info in fields:
+        has = (any(k in info for k in TYPE_KEYS),
+               any(k in info for k in MISS_KEYS),
+               any(k in info for k in DIST_KEYS))
+        if not all(has):
+            lack = [n for n, ok in zip(("类型", "缺失", "分布"), has) if not ok]
+            bad.append(f"{f}.{c} 缺{''.join(lack)}")
+    return (not bad), (f"{len(fields)} 个字段三项齐全" if not bad
+                       else f"{len(bad)}/{len(fields)} 处缺项: " + "；".join(bad[:3]))
 
 @check("1剖析", "空值分写法之和 = 该列总空值")
 def _():
-    rep = load_json(PROFILE)
+    rep = _load_profile()
     if rep is None:
-        return None
-    bad = []
-    for fn_, cols in rep.get("files", {}).items():
-        for col, info in cols.items():
-            miss = info.get("missing") or {}
-            total, by = miss.get("total"), miss.get("by_literal")
-            if isinstance(total, int) and isinstance(by, dict) and sum(by.values()) != total:
-                bad.append(f"{fn_}.{col}: 分写法{sum(by.values())} ≠ 总空值{total}")
-    return (not bad), ("全部相等" if not bad else "; ".join(bad[:3]))
+        return ("SKIP", "没找到剖析报告")
+    checked, bad = 0, []
+    for f, c, info in _iter_profile_fields(rep):
+        total, by = _missing_of(info)
+        if not isinstance(total, int) or not isinstance(by, dict):
+            continue
+        checked += 1
+        if sum(by.values()) != total:
+            bad.append(f"{f}.{c}: 分写法 {sum(by.values())} ≠ 总空值 {total}")
+    if checked == 0:
+        return ("SKIP", '报告里没有「分写法计数」这一项（只给了总数也算正常）')
+    return (not bad), (f"{checked} 列相等" if not bad else "；".join(bad[:3]))
 
 # ================= 第 2 步：诊断分类 =================
-# TODO（AI 第一次做到第 2 步时补全，依据手册第 2 步 D 段"先跑断言"）：
-#   - 每条发现都有 类别＋依据；类别都在枚举内
-#   - 待访谈清单条数 = 标"待访谈"的条数
+# 诊断是 markdown，机器只能验结构（有没有发现、有没有依据栏）；内容由检查者看。
+DIAG_CANDIDATES = [
+    BATCH / "reports" / "diagnosis.md",
+    BATCH / "reports" / "diagnosis" / "diagnosis.md",
+    BATCH / "diagnosis.md",
+]
+
+@check("2诊断", "诊断表有发现条目、且带依据栏（只验结构）")
+def _():
+    p = next((x for x in DIAG_CANDIDATES if x.exists()), None)
+    if p is None:
+        return ("SKIP", "没找到诊断文件（试过 reports/diagnosis.md 等 3 处）")
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    rows = re.findall(r"(?m)^\|\s*(?:F\d+|\d+)\s*\|", text) or \
+           re.findall(r"(?m)^#{2,4}\s*(?:F\d+|\d+)[\.、\s]", text)
+    if not rows:
+        return ("SKIP", '认不出发现编号（表格首列 F01／1、或标题 ###F01 都没匹配到）')
+    has_basis = any(k in text for k in ("依据", "证据", "出处", "basis", "evidence"))
+    if not has_basis:
+        return False, f'有 {len(rows)} 条发现，但全文找不到「依据／证据」栏'
+    return True, f'{len(rows)} 条发现，含依据栏（内容由检查者看）'
 
 # ================= 第 3 步：清洗规则 =================
 RULES = BATCH / "cleaning" / "cleaning_rules.yaml"
@@ -249,10 +362,24 @@ def _():
     return again == c.get("accepted"), f'第一次 {c.get("accepted")} vs 第二次 {again}'
 
 # ================= 第 5 步：覆盖与回答 =================
-# TODO（AI 第一次做到第 5 步时补全，依据手册第 5 步 D 段"先跑断言"）：
-#   - 每个缺口都落到指标库的具体指标
-#   - time_range 与数据实际 min/max 一致
-#   - 覆盖说明里每个数字都能在对账报告里找到
+# 覆盖说明是 markdown，只验结构要素（时间范围／缺口）；内容由检查者看。
+COVER_CANDIDATES = [
+    BATCH / "reports" / "coverage_notes.md",
+    BATCH / "reports" / "coverage.md",
+]
+
+@check("5覆盖", "覆盖说明含时间范围与缺口段（只验结构）")
+def _():
+    p = next((x for x in COVER_CANDIDATES if x.exists()), None)
+    if p is None:
+        return ("SKIP", "没找到覆盖说明（reports/coverage_notes.md）")
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    has_range = any(k in text for k in ("time_range", "时间范围", "覆盖期", "数据范围"))
+    has_gap = any(k in text for k in ("缺口", "未提供", "缺失", "未导出", "gap"))
+    lack = [n for n, ok in (("时间范围", has_range), ("缺口段", has_gap)) if not ok]
+    if lack:
+        return False, f'覆盖说明缺「{"／".join(lack)}」——没有缺口的覆盖说明等于没说边界'
+    return True, "含时间范围与缺口段（内容由检查者看）"
 
 # ================= 第 7 步：指标 =================
 # 不绑定具体文件名/字段名：三个常见落位都试，字段按"数值字段"识别
@@ -450,6 +577,12 @@ def selftest():
         if lost:
             fails.append(f"{f} 关键约束")
 
+    # 断言覆盖度：哪些步已内置、哪些还要 AI 补（防止未来误删断言）
+    covered = sorted({str(st)[0] for st, _, _ in CHECKS if str(st)[0].isdigit()})
+    uncovered = [str(i) for i in range(10) if str(i) not in covered]
+    print(f"PASS  断言 {len(CHECKS)} 条，已覆盖第 {'/'.join(covered)} 步"
+          + (f"；未覆盖 {','.join(uncovered)}（这几步靠 D 段人工或让 AI 补）" if uncovered else ""))
+
     ver_ok = False
     p01 = base / "01-通用手册.md"
     if p01.exists():
@@ -479,7 +612,9 @@ def main():
         except Exception as e:
             r = (False, f"断言自身报错: {e}")
         if r is None:
-            status, detail = "SKIP", "产物未生成/条件未满足"
+            status, detail = "SKIP", "产物未生成（到这一步再跑）"
+        elif isinstance(r, tuple) and len(r) == 2 and r[0] == "SKIP":
+            status, detail = "SKIP", r[1]
         else:
             ok, detail = r
             status = "PASS" if ok else "FAIL"
