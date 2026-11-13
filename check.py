@@ -68,13 +68,28 @@ def _():
     rj = load_json(RUN_JSON)
     if rj is None:
         return None
-    bad = []
-    for item in rj.get("input_files", []):
-        p = RAW_DIR / item["file"]
+    files = rj.get("input_files") or {}
+    # 兼容两种写法：{"文件名": "sha256"} 或 [{"file": "…", "sha256": "…"}]
+    if isinstance(files, dict):
+        pairs = list(files.items())
+    else:
+        pairs = [(it.get("file"), it.get("sha256")) for it in files if isinstance(it, dict)]
+
+    bad, checked = [], 0
+    for name, want in pairs:
+        if not name or not isinstance(want, str) or len(want) < 32:
+            continue
+        p = RAW_DIR / name
+        if not p.exists():                      # 原始区常带一层日期目录，递归找
+            hits = list(RAW_DIR.rglob(name))
+            p = hits[0] if hits else p
         actual = sha256_of(p) if p.exists() else "文件不存在"
-        if actual != item["sha256"]:
-            bad.append(item["file"])
-    return (not bad), ("全部一致" if not bad else f"哈希不符: {bad}")
+        checked += 1
+        if actual != want:
+            bad.append(f"{name}：记录 {want[:12]}… 实际 {actual[:12]}…")
+    if checked == 0:
+        return None
+    return (not bad), ("全部一致" if not bad else "哈希不符 → " + "；".join(bad[:3]))
 
 # ================= 第 1 步：剖析 =================
 # 约定剖析产物为 BATCH/profile/profile_report.json：
@@ -125,6 +140,63 @@ def _():
         return None  # 无 PyYAML 时让 AI 用它自己的解析器补这条
     except Exception as e:
         return False, f"解析失败: {e}"
+
+# --- 字段验：行数对只说明没丢记录，不说明没丢值 ---
+# 真实踩过的坑：某列映射写错整列变空，四条行数判据全过、灯表全绿，
+# 到第 7 步算指标才发现那列没数据。所以这里按列位置比"非空率"。
+
+def _read_csv(p: Path):
+    import csv
+    with open(p, encoding="utf-8-sig", newline="") as f:
+        rd = csv.DictReader(f)
+        return (rd.fieldnames or []), list(rd)
+
+@check("3清洗", "清洗后字段非空率不低于原始（行对≠值对）")
+def _():
+    clean_dir = BATCH / "cleaning"
+    if not clean_dir.exists():
+        return None
+    raw_files = list(RAW_DIR.rglob("*.csv")) if RAW_DIR.exists() else []
+    if not raw_files:
+        return None
+
+    problems, compared, lowest = [], 0, 1.0
+    for clean in sorted(clean_dir.glob("*.csv")):
+        stem = clean.stem.lower()
+        cands = [p for p in raw_files if stem in p.stem.lower()]
+        if len(cands) != 1:
+            continue                      # 原始表找不到或不唯一 → 跳过，不硬判
+        ccols, crows = _read_csv(clean)
+        rcols, rrows = _read_csv(cands[0])
+        n = len(crows)
+        if n == 0:
+            continue
+        compared += 1
+
+        # 1) 清洗后自身有没有整列全空
+        for c in ccols:
+            rate = sum(1 for r in crows if (r.get(c) or "").strip()) / n
+            lowest = min(lowest, rate)
+            if rate == 0:
+                problems.append(f"{clean.name}.{c} 整列全空（{n} 行）")
+
+        # 2) 列数相同则按位置逐列比非空率（列名不同也能比）
+        if rrows and len(ccols) == len(rcols):
+            m = len(rrows)
+            for c, rc in zip(ccols, rcols):
+                cr = sum(1 for r in crows if (r.get(c) or "").strip()) / n
+                rr = sum(1 for r in rrows if (r.get(rc) or "").strip()) / m
+                if rr > 0 and cr == 0:
+                    problems.append(f"{c}(原「{rc}」) 原始 {rr:.0%} → 清洗后 0%")
+                elif rr - cr > 0.30:
+                    problems.append(f"{c}(原「{rc}」) 原始 {rr:.0%} → 清洗后 {cr:.0%}，跌 {rr - cr:.0%}")
+
+    if compared == 0:
+        return None
+    if problems:
+        more = f"（另有 {len(problems) - 3} 处）" if len(problems) > 3 else ""
+        return False, "；".join(problems[:3]) + more + "　掉值必须在 clean_report 里写明原因"
+    return True, f"{compared} 张表逐列比对：无整列丢失、无骤降（最低非空率 {lowest:.0%}，可空列属正常）"
 
 # ================= 第 4 步：导入对账 =================
 # 约定对账产物为 BATCH/reconcile/counts.json：
