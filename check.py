@@ -204,15 +204,39 @@ def _():
 # AI 重跑一次后把第二次的 accepted 写进 BATCH/reconcile/second_run_accepted.txt
 COUNTS = BATCH / "reconcile" / "counts.json"
 SECOND = BATCH / "reconcile" / "second_run_accepted.txt"
+RECON = BATCH / "reports" / "reconciliation.json"
 
 @check("4对账", "read = accepted + quarantined + deduplicated")
 def _():
+    # 形式一：单表单文件 {"read","accepted","quarantined","deduplicated"}
     c = load_json(COUNTS)
-    if c is None:
+    if c is not None:
+        lhs = c.get("read")
+        rhs = c.get("accepted", 0) + c.get("quarantined", 0) + c.get("deduplicated", 0)
+        return lhs == rhs, f"read={lhs} vs 三类之和={rhs}"
+
+    # 形式二：对账报告里按表分列 {"segment_one":{表:{read,accepted*,quarantined,deduplicated}}}
+    d = load_json(RECON)
+    if d is None:
         return None
-    lhs = c.get("read")
-    rhs = c.get("accepted", 0) + c.get("quarantined", 0) + c.get("deduplicated", 0)
-    return lhs == rhs, f"read={lhs} vs 三类之和={rhs}"
+    seg = d.get("segment_one") or d.get("tables") or {}
+    if not isinstance(seg, dict) or not seg:
+        return None
+    bad, checked = [], 0
+    for table, v in seg.items():
+        if not isinstance(v, dict):
+            continue
+        read = v.get("read")
+        acc = v.get("accepted", v.get("accepted_derived"))
+        if read is None or acc is None:
+            continue
+        rhs = acc + v.get("quarantined", 0) + v.get("deduplicated", 0)
+        checked += 1
+        if read != rhs:
+            bad.append(f"{table}: read={read} ≠ {acc}+{v.get('quarantined', 0)}+{v.get('deduplicated', 0)}={rhs}")
+    if checked == 0:
+        return None
+    return (not bad), (f"{checked} 张表等式全部成立" if not bad else "；".join(bad[:3]))
 
 @check("4对账", "两次运行 accepted 不变（幂等）")
 def _():
