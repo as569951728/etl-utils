@@ -16,6 +16,11 @@
 
 ---
 
+## 先试用（没有客户材料也能做）
+
+已解示例：`python3 demo.py --output /tmp/etl-first-run-01`，见 `examples/first-run/README.md`。
+亲自练习：`python3 practice.py --output /path/to/new-practice`，打开生成的 `00-开始练习.md`。所有材料原创合成；练习不会先替你作答。
+
 ## A. 新项目起步
 
 **要做四件事，顺序不能乱。**
@@ -24,16 +29,20 @@
 
 ```sh
 cd <你的新项目目录>
-git clone https://github.com/as569951728/etl-utils.git .etl-utils
+git clone --branch v1.12 https://github.com/as569951728/etl-utils.git .etl-utils
 ```
 
-### A2. 项目根建 `AGENTS.md`，写一行
+### A2. 记录一次项目位置
 
-```
-ETL 工具包在 .etl-utils/，按它的 AGENTS.md 执行；出定制手册前先读 03。
+在项目根运行：
+
+```sh
+python3 .etl-utils/etl_project.py init --ledger 客户-ETL工作手册.md --batch artifacts/b01 --mode learning
 ```
 
-> 这一行的作用：以后每次在这个项目里开会话，AI 自动知道包在哪，你不必再交代路径。
+它生成 `etl-project.json`，并给已有 AGENTS.md 追加入口，不覆盖原规则。
+默认学习模式，一步一停。需要执行模式时显式选择 execution，模式不替代业务授权。
+不能自动读取 AGENTS.md 的 AI 客户端，显式让它读入口与项目配置。
 
 ### A3. 把客户材料放进项目
 
@@ -47,7 +56,7 @@ data/           要入库的数据（原始区将来设为只读）
 ### A4. 对新会话说这一句
 
 ```
-读 .etl-utils，给这个客户出一份 ETL 手册。
+开始这个客户。读 .etl-utils 的入口与 etl-project.json，先起草四格背景，等我确认。
 客户材料在 materials/，业务背景见 <哪份文件>。
 ```
 
@@ -67,11 +76,7 @@ python3 .etl-utils/check.py --status
 
 它会显示台账标记、下一步编号，并核对已完成行的产物路径。它不代替判据与回溯验收；多个候选时用 `--ledger 客户-ETL工作手册.md` 指定，项目根不明确时加 `--project-root /项目路径`。
 
-拿到编号后：
-
-1. 打开项目的 `*-ETL工作手册.md`，找第 N 步那张**实值卡**（看"本业务的坑"）；
-2. 打开 `.etl-utils/01-通用手册.md`，搜那个编号（如 `C4-A`），**整段复制**；
-3. 连同技术卡 `C4-A2` 一起发给 AI。
+日常只需对 AI 说“继续”或“验收这一步”。它按项目配置读真实台账，自己取通用手册的指令与技术卡；你核对证据并决定下一步，不必手动复制编号。看原指令时才用编号查阅。
 
 **如果你连项目目录在哪都忘了**：`--status` 要在项目根跑；找不到就 `cd` 到有 `artifacts/` 的那个目录再跑。
 
@@ -114,17 +119,17 @@ python3 .etl-utils/check.py --status
 | **看我在第几步、下一步发什么** | `python3 .etl-utils/check.py --status` |
 | 跑断言（某一步做完后） | `python3 .etl-utils/check.py <批次目录> --stage N` |
 | 校验工具包自身没坏 | `python3 .etl-utils/check.py --selftest` |
-| 更新工具包 | `cd .etl-utils && git pull` |
+| 更新工具包 | 先读 CHANGELOG.md，保留本地修改，选定 Release 标签后更新并复核 |
 
 **退出码怎么看**：`0` 所选内置检查齐全通过｜`1` 有 FAIL（证据冲突）｜`2` MISSING（缺件／歧义／无法判定）。不指定 `--stage` 时仅巡检，有未执行项返回 2。字段和单位检查需项目契约配置，见 README「检查怎么用」。
 
-> 上面用 `.etl-utils` 作目录名。你 clone 到别处也行，命令里的路径跟着换即可。
+> 上面用 `.etl-utils` 作目录名。你 clone 到别处也行，命令里的路径跟着换即可；项目登记会记录工具包相对位置。
 
 ---
 
 ## 两个最容易踩的坑
 
 1. **没读四格就让它生成手册** → 手册里的实值和坑全是猜的，后面每一步都在还账。
-2. **一个会话让它连做两步** → 你来不及验，错了也不知道是哪一步错的。**一次只发一条指令。**
+2. **学习模式让它一口气做完整单** → 你来不及验。学习模式一次一个小步骤；执行模式在明确授权内推进，到证据和业务决策节点停。
 
 > 完整的规则在 `AGENTS.md`（给 AI 的）和 `01-通用手册.md`（给人的）。这一页只是入口。

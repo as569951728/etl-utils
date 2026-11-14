@@ -1,0 +1,30 @@
+name: ETL toolkit checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12', '3.13']
+        yaml: [absent, present]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install optional YAML dependency
+        if: matrix.yaml == 'present'
+        run: python -m pip install PyYAML==6.0.3
+      - name: Ensure no YAML dependency
+        if: matrix.yaml == 'absent'
+        run: python -m pip uninstall -y PyYAML
+      - name: Self-test, synthetic replay and onboarding regressions
+        run: python check.py --selftest
+      - name: Replay published first-run example
+        run: python demo.py --output "${{ runner.temp }}/etl-first-run"

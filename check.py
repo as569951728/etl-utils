@@ -663,14 +663,16 @@ def selftest():
     base = Path(__file__).parent
     need = ["README.md", "START-HERE.md", "AGENTS.md", "01-通用手册.md",
             "02-知识库-K1-K11.md", "03-生成定制手册话术.md", "04-进度台账模板.md",
-            "check.py", "test_check.py", "check-config.example.json", "全景图-十步.svg", "LICENSE"]
+            "check.py", "test_check.py", "test_onboarding.py", "etl_project.py", "demo.py", "practice.py",
+            "check-config.example.json", "examples/first-run/source.json", "examples/first-run/README.md",
+            "SOURCES.md", "CHANGELOG.md", ".github/workflows/check.yml", "全景图-十步.svg", "LICENSE"]
     must_have = {
         "README.md": ["先看清，再动手", "行数对，不等于值对", "不知道的不估算", "第一次用：头一小时怎么过",
                       "按它的 AGENTS.md 执行"],
         "AGENTS.md": ["五条铁律", "一次只做一步", "遇到新情况先报影响面", "回溯件已生成"],
         "01-通用手册.md": ["验收四件套", "查回溯件", "中途变了怎么办", "必须停下来", "字段验"],
         "03-生成定制手册话术.md": ["我做四件事", "必留的回溯件", "只验数不验回溯", "手册是活文档"],
-        "START-HERE.md": ["--status", "先跑一条命令", "按它的 AGENTS.md 执行"],
+        "START-HERE.md": ["--status", "先跑一条命令", "etl_project.py init"],
     }
     fails = []
     print(f"工具包自检：{base}")
@@ -717,7 +719,7 @@ def selftest():
         fails.append("版本号")
 
     regression = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", str(base), "-p", "test_check.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", str(base), "-p", "test_*.py", "-v"],
         cwd=base, capture_output=True, text=True, timeout=120)
     regression_output = regression.stderr + regression.stdout
     count = re.search(r"Ran (\d+) tests?", regression_output)
@@ -745,6 +747,21 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def apply_project_defaults(args):
+    root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+    if not (root / "etl-project.json").exists():
+        return
+    from etl_project import load_settings
+    settings = load_settings(root)
+    if settings is None:
+        return
+    args.project_root = str(root)
+    args.batch = args.batch or settings["batch"]
+    args.ledger = args.ledger or settings["ledger"]
+    # 尚未走到字段/单位检查时，配置路径允许处于“计划生成”状态。
+    args.project_checks = str(root / settings["checks"])
+
+
 def configure(args):
     global BATCH, ROOT, RAW_DIR, CONFIG, RUN_JSON, PROFILE_CANDIDATES
     global DIAG_CANDIDATES, RULES, COUNTS, SECOND, RECON, COVER_CANDIDATES, METRICS_CANDIDATES
@@ -753,7 +770,7 @@ def configure(args):
     BATCH = _resolve_batch(raw_batch if raw_batch.is_absolute() else project / raw_batch)
     ROOT = project if args.project_root else _find_project_root(BATCH)
     RAW_DIR = ROOT / "data/raw"
-    config_path = Path(args.config) if args.config else project / "check_config.json"
+    config_path = Path(args.config or getattr(args, "project_checks", project / "check_config.json"))
     if not config_path.is_absolute():
         config_path = project / config_path
     if args.config and not config_path.is_file():
@@ -779,6 +796,11 @@ def main(argv=None):
     args = parse_args(argv)
     if args.selftest:
         return selftest()
+    try:
+        apply_project_defaults(args)
+    except (OSError, ValueError, ImportError) as exc:
+        print(f"MISSING  项目定位配置无法读取: {exc}")
+        return 2
     if args.status:
         return show_status(args)
     try:

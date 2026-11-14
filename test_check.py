@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import importlib.util
 
 SCRIPT = Path(__file__).with_name("check.py")
 
@@ -139,6 +140,20 @@ class CheckBehaviorTests(unittest.TestCase):
     def test_reordered_fields_follow_mapping(self):
         self.field_config("memo", "memo")
         self.assertNotIn("FAIL", self.invoke(self.batch, "--stage", 3)[1])
+
+    def test_valid_yaml_parses_or_reports_missing_dependency(self):
+        self.field_config()
+        self.put("artifacts/b01/cleaning/cleaning_rules.yaml", "rules:\n  - action: keep\n")
+        code, output = self.invoke(self.batch, "--stage", 3)
+        self.assertEqual(code, 0 if importlib.util.find_spec("yaml") else 2, output)
+        if importlib.util.find_spec("yaml") is None:
+            self.assertIn("缺可选依赖 PyYAML", output)
+
+    def test_broken_yaml_fails_when_parser_available(self):
+        self.field_config()
+        self.put("artifacts/b01/cleaning/cleaning_rules.yaml", "rules: [unterminated\n")
+        code, output = self.invoke(self.batch, "--stage", 3)
+        self.assertEqual(code, 1 if importlib.util.find_spec("yaml") else 2, output)
 
     def test_real_value_loss_fails(self):
         self.field_config("memo", "")
