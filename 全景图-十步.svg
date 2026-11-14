@@ -70,7 +70,7 @@
   <line x1="20" y1="186" x2="960" y2="186" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4"/>
   <rect x="270" y="173" width="440" height="26" rx="13" fill="#ffffff" stroke="#cbd5e1"/>
   <text x="490" y="190" font-size="10" fill="#475569" text-anchor="middle">交接物：清洗后的表 ＋ 对账报告 ＋ 隔离明细 ＋ 访谈证据</text>
-  <text x="20" y="238" font-size="10.5" font-weight="700" fill="#047857">第二段 · 数据之后（第 6–9 步）——把数据变成别人敢用的结论：先问清、再改模型、写清边界、最后交付</text>
+  <text x="20" y="238" font-size="10.5" font-weight="700" fill="#047857">第二段 · 数据之后（第 6–9 步）——把数据变成别人敢用的结论：核实可前置与回访，再改模型、写清边界、最后交付</text>
   <rect x="20" y="250" width="150" height="92" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.5"/>
   <text x="95" y="272" font-size="11.5" font-weight="700" fill="#047857" text-anchor="middle">输入</text>
   <text x="95" y="292" font-size="9.5" fill="#065f46" text-anchor="middle">上一段产出</text>
@@ -122,5 +122,5 @@
   <text x="783" y="310" font-size="9" fill="#92400e" text-anchor="middle">每个数都有出处</text>
   <text x="783" y="326" font-size="9" fill="#92400e" text-anchor="middle">每个缺口写在数旁</text>
   <text x="20" y="378" font-size="10" fill="#475569">每步验收同一套路：先跑断言（机器判）→ 独立检查者复查（新会话，只给证据不给代码）→ 我只抽 3 条最不像的</text>
-  <text x="20" y="396" font-size="10" fill="#b45309">数据段的错会静默留在数里；数据之后的错会静默留在话里——后者更贵，因为它会被当结论用</text>
+  <text x="20" y="396" font-size="10" fill="#b45309">第 6 步是可前置、可回访的核实模块：影响含义与处理的疑点，须在清洗执行前确认</text>
 </svg>

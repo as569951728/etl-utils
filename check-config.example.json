@@ -1,0 +1,25 @@
+{
+  "field_checks": [
+    {
+      "raw": "source.csv",
+      "clean": "cleaning/target.csv",
+      "null_values": ["", "NULL"],
+      "columns": [
+        {"source": "source_id", "target": "id", "required": true, "max_drop": 0},
+        {"source": "source_note", "target": "note", "required": false, "max_drop": 0.3}
+      ]
+    }
+  ],
+  "unit_checks": [
+    {
+      "metric": "sample_amount",
+      "value": "value",
+      "unit": "unit",
+      "expected_unit": "分",
+      "display": "display",
+      "display_unit": "display_unit",
+      "expected_display_unit": "元",
+      "scale": 100
+    }
+  ]
+}

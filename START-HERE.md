@@ -65,7 +65,7 @@ data/           要入库的数据（原始区将来设为只读）
 python3 .etl-utils/check.py --status
 ```
 
-它会告诉你：在第几步、哪些步已完成、下一步该发哪条编号、该有的产物在不在。
+它会显示台账标记、下一步编号，并核对已完成行的产物路径。它不代替判据与回溯验收；多个候选时用 `--ledger 客户-ETL工作手册.md` 指定，项目根不明确时加 `--project-root /项目路径`。
 
 拿到编号后：
 
@@ -103,7 +103,7 @@ python3 .etl-utils/check.py --status
 
 1. 版本号 +0.1（改口径）或 +1.0（改结构），写变更说明；
 2. `python3 check.py --selftest` 跑一遍自检；
-3. 提交并按 `README.md` 的推送方式推上去。
+3. 审阅差异并提交；推送到远程按用户本次授权范围执行，交付时说明本地与远程状态。
 
 ---
 
@@ -112,11 +112,11 @@ python3 .etl-utils/check.py --status
 | 想干什么 | 命令 |
 | --- | --- |
 | **看我在第几步、下一步发什么** | `python3 .etl-utils/check.py --status` |
-| 跑断言（某一步做完后） | `python3 .etl-utils/check.py <批次目录>` |
+| 跑断言（某一步做完后） | `python3 .etl-utils/check.py <批次目录> --stage N` |
 | 校验工具包自身没坏 | `python3 .etl-utils/check.py --selftest` |
 | 更新工具包 | `cd .etl-utils && git pull` |
 
-**退出码怎么看**：`0` 通过（可能有 SKIP，属未到那一步）｜`1` 有 FAIL，修完再交｜`2` 路径或产物不对，先跑 `--status`。
+**退出码怎么看**：`0` 所选内置检查齐全通过｜`1` 有 FAIL（证据冲突）｜`2` MISSING（缺件／歧义／无法判定）。不指定 `--stage` 时仅巡检，有未执行项返回 2。字段和单位检查需项目契约配置，见 README「检查怎么用」。
 
 > 上面用 `.etl-utils` 作目录名。你 clone 到别处也行，命令里的路径跟着换即可。
 

@@ -10,12 +10,13 @@ check.py —— ETL 批次断言脚本（配套《W04-ETL个人工作手册》�
     例：python check.py artifacts/b1-20261111
        （不传参数则默认跑 artifacts/current 指向的批次）
 
-看结果：只扫 FAIL 行；SKIP = 那一步的产物还没生成，属正常，不用管。
-退出码：无 FAIL → 0；有任一 FAIL → 1（AI 修完才能交活）。
+看结果：PASS 只代表列出的检查；FAIL 是证据冲突；MISSING 是未完成验证。
+使用 --stage N 验当前步骤；无 --stage 时只做巡检，有跳过项返回 2。
+退出码：检查范围完整通过 → 0；FAIL → 1；缺件/无法判定 → 2。
 
 AI 补断言时必须遵守（独立检查三原则）：
   1. 数据只从批次目录里的产物文件读，不照处理代码反推；
-  2. 对应产物文件不存在 → return None（记 SKIP），不许硬编通过；
+  2. 产物缺失 → return None 或 ("SKIP", "原因")，入口统一记 MISSING，不许编通过；
   3. detail 里带两个数："产物说 X、我算出 Y"，不许只写"不一致"。
 """
 
@@ -23,11 +24,14 @@ import sys
 import re
 import json
 import hashlib
+import argparse
+import subprocess
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 # ---------- 定位批次 ----------
-BATCH = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("artifacts/current")
-BATCH = BATCH.resolve()
+BATCH = Path.cwd() / "artifacts/current"
+CONFIG = {}
 
 def _find_project_root(batch: Path) -> Path:
     """向上最多 4 层找含 data/raw 的目录；找不到就按常规布局猜。"""
@@ -69,7 +73,14 @@ def _():
     if rj is None:
         return None
     need = ["input_files", "rules_version", "code_version", "started_at", "command"]
-    bad = [k for k in need if k not in rj or str(rj[k]).strip() in ("", "TODO", "待确认")]
+    if not isinstance(rj, dict):
+        return False, "run.json 必须是对象"
+    placeholders = {"", "todo", "tbd", "待确认", "initial", "none", "null"}
+    bad = [k for k in need[1:] if not isinstance(rj.get(k), str)
+           or rj[k].strip().lower() in placeholders]
+    files = rj.get("input_files")
+    if not isinstance(files, (dict, list)) or not files:
+        bad.append("input_files 必须是非空清单")
     return (not bad), ("5 键齐全" if not bad else f"缺/占位: {bad}")
 
 @check("0建档", "raw 文件 sha256 与 run.json 记录一致")
@@ -77,28 +88,43 @@ def _():
     rj = load_json(RUN_JSON)
     if rj is None:
         return None
-    files = rj.get("input_files") or {}
+    if not isinstance(rj, dict):
+        return False, "run.json 必须是对象"
+    files = rj.get("input_files")
     # 兼容两种写法：{"文件名": "sha256"} 或 [{"file": "…", "sha256": "…"}]
     if isinstance(files, dict):
         pairs = list(files.items())
+    elif isinstance(files, list) and all(isinstance(it, dict) for it in files):
+        pairs = [(it.get("file"), it.get("sha256")) for it in files]
     else:
-        pairs = [(it.get("file"), it.get("sha256")) for it in files if isinstance(it, dict)]
+        return False, "input_files 缺失或格式不正确"
+    if not pairs:
+        return False, "input_files 为空，没有输入可以核验"
 
-    bad, checked = [], 0
+    bad, unavailable, checked = [], [], 0
     for name, want in pairs:
-        if not name or not isinstance(want, str) or len(want) < 32:
+        if not isinstance(name, str) or not name or not isinstance(want, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", want):
+            bad.append(f"无效文件名或 SHA-256: {name!r}")
             continue
         p = RAW_DIR / name
         if not p.exists():                      # 原始区常带一层日期目录，递归找
             hits = list(RAW_DIR.rglob(name))
+            if len(hits) > 1:
+                unavailable.append(f"{name} 匹配多个原件，请记录相对 raw 的完整路径")
+                continue
             p = hits[0] if hits else p
-        actual = sha256_of(p) if p.exists() else "文件不存在"
+        if not p.is_file():
+            unavailable.append(f"原始文件不存在: {name}")
+            continue
+        actual = sha256_of(p)
         checked += 1
-        if actual != want:
+        if actual != want.lower():
             bad.append(f"{name}：记录 {want[:12]}… 实际 {actual[:12]}…")
-    if checked == 0:
-        return None
-    return (not bad), ("全部一致" if not bad else "哈希不符 → " + "；".join(bad[:3]))
+    if bad:
+        return False, "输入核验失败 → " + "；".join(bad[:3])
+    if unavailable:
+        return ("SKIP", "；".join(unavailable[:3]))
+    return checked == len(pairs), f"{checked} 个输入哈希全部一致"
 
 # ================= 第 1 步：剖析 =================
 # 不绑定报告结构与键名：按"形状"识别 file→col→info（三种常见写法都认），认不出就 SKIP。
@@ -107,11 +133,11 @@ PROFILE_CANDIDATES = [
     BATCH / "reports" / "profile_report.json",
     BATCH / "profile_report.json",
 ]
-TYPE_KEYS = ("type", "dtype", "data_type", "数据类型")
+TYPE_KEYS = ("type", "dtype", "data_type", "inferred_type", "数据类型")
 MISS_KEYS = ("missing", "nulls", "null_stats", "na", "empty",
              "empty_total", "empty_by_style", "null_count", "missing_count")
 DIST_KEYS = ("distribution", "dist", "distinct", "top", "top10", "top_values",
-             "values", "value_counts", "取值分布")
+             "values", "value_counts", "range", "取值分布")
 
 def _pick(d, *names):
     for n in names:
@@ -144,6 +170,23 @@ def _iter_profile_fields(rep):
 
     def walk(node, path):
         if isinstance(node, dict):
+            # 显式 fields/columns 容器优先，避免把整个容器误当成一列。
+            for container in ("fields", "columns"):
+                cols = node.get(container)
+                if isinstance(cols, dict) and not any(k in cols for k in TYPE_KEYS + MISS_KEYS + DIST_KEYS):
+                    fname = _pick(node, "source_file", "file", "file_name", "table") or (path[-1] if path else "?")
+                    for col, info in cols.items():
+                        if isinstance(info, dict):
+                            add(fname, col, info)
+                    return
+                if isinstance(cols, list):
+                    walk(cols, path)
+                    return
+            if _pick(node, "field", "column") is not None:
+                add(_pick(node, "source_file", "file", "file_name")
+                    or next((x for x in reversed(path) if isinstance(x, str) and FILE_RE.search(x)), "?"),
+                    _pick(node, "field", "column"), node)
+                return
             # ① 文件锚点：当前层就是「列名 → 列信息」
             if path and isinstance(path[-1], str) and FILE_RE.search(path[-1]):
                 cols = {k: v for k, v in node.items() if isinstance(v, dict)}
@@ -211,16 +254,23 @@ def _():
     rep = _load_profile()
     if rep is None:
         return ("SKIP", "没找到剖析报告")
-    checked, bad = 0, []
+    checked, bad, unavailable = 0, [], []
     for f, c, info in _iter_profile_fields(rep):
         total, by = _missing_of(info)
-        if not isinstance(total, int) or not isinstance(by, dict):
+        if type(total) is not int or not isinstance(by, dict):
+            unavailable.append(f"{f}.{c}")
             continue
         checked += 1
-        if sum(by.values()) != total:
+        if total < 0 or any(type(v) is not int or v < 0 for v in by.values()):
+            bad.append(f"{f}.{c}: 空值计数须为非负整数")
+        elif sum(by.values()) != total:
             bad.append(f"{f}.{c}: 分写法 {sum(by.values())} ≠ 总空值 {total}")
+    if bad:
+        return False, "；".join(bad[:3])
+    if unavailable:
+        return ("SKIP", "缺逐字段空值分写法统计: " + "、".join(unavailable[:5]))
     if checked == 0:
-        return ("SKIP", '报告里没有「分写法计数」这一项（只给了总数也算正常）')
+        return ("SKIP", '没有可核验的空值分写法统计')
     return (not bad), (f"{checked} 列相等" if not bad else "；".join(bad[:3]))
 
 # ================= 第 2 步：诊断分类 =================
@@ -255,16 +305,16 @@ def _():
         return None
     try:
         import yaml
-        yaml.safe_load(RULES.read_text(encoding="utf-8"))
-        return True, "解析通过"
+        parsed = yaml.safe_load(RULES.read_text(encoding="utf-8"))
+        return isinstance(parsed, (dict, list)) and bool(parsed), "仅验 YAML 非空结构；规则内容与 schema 仍需项目验收"
     except ImportError:
-        return None  # 无 PyYAML 时让 AI 用它自己的解析器补这条
+        return ("SKIP", "缺可选依赖 PyYAML，未验证 YAML；安装后重跑")
     except Exception as e:
         return False, f"解析失败: {e}"
 
 # --- 字段验：行数对只说明没丢记录，不说明没丢值 ---
 # 真实踩过的坑：某列映射写错整列变空，四条行数判据全过、灯表全绿，
-# 到第 7 步算指标才发现那列没数据。所以这里按列位置比"非空率"。
+# 到第 7 步算指标才发现那列没数据。按项目确认的映射核对，不能按列位置猜。
 
 def _read_csv(p: Path):
     import csv
@@ -272,52 +322,56 @@ def _read_csv(p: Path):
         rd = csv.DictReader(f)
         return (rd.fieldnames or []), list(rd)
 
-@check("3清洗", "清洗后字段非空率不低于原始（行对≠值对）")
+@check("3清洗", "按已确认字段映射核对非空率与必填约束")
 def _():
-    clean_dir = BATCH / "cleaning"
-    if not clean_dir.exists():
-        return None
-    raw_files = list(RAW_DIR.rglob("*.csv")) if RAW_DIR.exists() else []
-    if not raw_files:
-        return None
-
-    problems, compared, lowest = [], 0, 1.0
-    for clean in sorted(clean_dir.glob("*.csv")):
-        stem = clean.stem.lower()
-        cands = [p for p in raw_files if stem in p.stem.lower()]
-        if len(cands) != 1:
-            continue                      # 原始表找不到或不唯一 → 跳过，不硬判
+    specs = CONFIG.get("field_checks")
+    if not specs:
+        return ("SKIP", "缺 field_checks 映射配置；不按列位置或文件名猜语义")
+    if not isinstance(specs, list):
+        return ("SKIP", "field_checks 应为列表，请修正配置")
+    problems, checked = [], 0
+    for spec in specs:
+        if not isinstance(spec, dict) or not all(k in spec for k in ("raw", "clean", "columns")):
+            return ("SKIP", "field_checks 每项须有 raw/clean/columns")
+        raw, clean = RAW_DIR / spec["raw"], BATCH / spec["clean"]
+        if not raw.is_file() or not clean.is_file():
+            return ("SKIP", f"映射文件缺失: {raw} / {clean}")
+        rcols, rrows = _read_csv(raw)
         ccols, crows = _read_csv(clean)
-        rcols, rrows = _read_csv(cands[0])
-        n = len(crows)
-        if n == 0:
-            continue
-        compared += 1
-
-        # 1) 清洗后自身有没有整列全空
-        for c in ccols:
-            rate = sum(1 for r in crows if (r.get(c) or "").strip()) / n
-            lowest = min(lowest, rate)
-            if rate == 0:
-                problems.append(f"{clean.name}.{c} 整列全空（{n} 行）")
-
-        # 2) 列数相同则按位置逐列比非空率（列名不同也能比）
-        if rrows and len(ccols) == len(rcols):
-            m = len(rrows)
-            for c, rc in zip(ccols, rcols):
-                cr = sum(1 for r in crows if (r.get(c) or "").strip()) / n
-                rr = sum(1 for r in rrows if (r.get(rc) or "").strip()) / m
-                if rr > 0 and cr == 0:
-                    problems.append(f"{c}(原「{rc}」) 原始 {rr:.0%} → 清洗后 0%")
-                elif rr - cr > 0.30:
-                    problems.append(f"{c}(原「{rc}」) 原始 {rr:.0%} → 清洗后 {cr:.0%}，跌 {rr - cr:.0%}")
-
-    if compared == 0:
-        return None
-    if problems:
-        more = f"（另有 {len(problems) - 3} 处）" if len(problems) > 3 else ""
-        return False, "；".join(problems[:3]) + more + "　掉值必须在 clean_report 里写明原因"
-    return True, f"{compared} 张表逐列比对：无整列丢失、无骤降（最低非空率 {lowest:.0%}，可空列属正常）"
+        columns = spec["columns"]
+        if not isinstance(columns, list) or not columns:
+            return ("SKIP", "columns 必须是非空字段映射列表")
+        null_values = spec.get("null_values", [""])
+        if not isinstance(null_values, list) or not all(isinstance(v, str) for v in null_values):
+            return ("SKIP", "null_values 须为字符串列表")
+        nulls = set(null_values)
+        for col in columns:
+            if not isinstance(col, dict) or not all(k in col for k in ("source", "target")):
+                return ("SKIP", "字段映射须有 source/target")
+            if set(col) - {"source", "target", "required", "max_drop"}:
+                return ("SKIP", "字段映射含未知配置键，请核对拼写")
+            source, target = col["source"], col["target"]
+            if type(col.get("required", False)) is not bool:
+                return ("SKIP", "required 必须是布尔值，不能用字符串代替")
+            if source not in rcols or target not in ccols:
+                problems.append(f"映射字段缺失: {source} → {target}")
+                continue
+            if not rrows or not crows:
+                return ("SKIP", "空表不能计算非空率；请核对去向、隔离与空表预期")
+            rr = sum((r.get(source) or "").strip() not in nulls for r in rrows) / len(rrows)
+            cr = sum((r.get(target) or "").strip() not in nulls for r in crows) / len(crows)
+            checked += 1
+            if col.get("required", False) and cr < 1:
+                problems.append(f"{target} 约定必填，实际非空率 {cr:.1%}")
+            # 只有项目明确约定容许下降值，才据此作硬判；无阈值只展示统计。
+            limit = col.get("max_drop")
+            if limit is not None:
+                if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not 0 <= limit <= 1:
+                    return ("SKIP", "max_drop 必须是 0～1 的数")
+                if rr - cr > limit:
+                    problems.append(f"{source} → {target}: 原始 {rr:.1%}，清洗后 {cr:.1%}，超过约定下降 {limit:.1%}")
+            print(f"INFO  字段 {source} → {target}: 原始 {rr:.1%}，清洗后 {cr:.1%}")
+    return (not problems and checked > 0), ("；".join(problems[:5]) if problems else f"{checked} 个映射字段符合所配置约束（未配置的字段未验证）")
 
 # ================= 第 4 步：导入对账 =================
 # 约定对账产物为 BATCH/reconcile/counts.json：
@@ -327,11 +381,21 @@ COUNTS = BATCH / "reconcile" / "counts.json"
 SECOND = BATCH / "reconcile" / "second_run_accepted.txt"
 RECON = BATCH / "reports" / "reconciliation.json"
 
+def _count_error(counts):
+    keys = ("read", "accepted", "quarantined", "deduplicated")
+    if not isinstance(counts, dict):
+        return "计数必须是对象"
+    bad = [k for k in keys if type(counts.get(k)) is not int or counts[k] < 0]
+    return "计数缺失或不是非负整数: " + ",".join(bad) if bad else None
+
 @check("4对账", "read = accepted + quarantined + deduplicated")
 def _():
     # 形式一：单表单文件 {"read","accepted","quarantined","deduplicated"}
     c = load_json(COUNTS)
     if c is not None:
+        error = _count_error(c)
+        if error:
+            return False, error
         lhs = c.get("read")
         rhs = c.get("accepted", 0) + c.get("quarantined", 0) + c.get("deduplicated", 0)
         return lhs == rhs, f"read={lhs} vs 三类之和={rhs}"
@@ -346,6 +410,14 @@ def _():
     bad, checked = [], 0
     for table, v in seg.items():
         if not isinstance(v, dict):
+            bad.append(f"{table}: 计数应为对象")
+            continue
+        v = dict(v)
+        if "accepted" not in v and "accepted_derived" in v:
+            v["accepted"] = v["accepted_derived"]
+        error = _count_error(v)
+        if error:
+            bad.append(f"{table}: {error}")
             continue
         read = v.get("read")
         acc = v.get("accepted", v.get("accepted_derived"))
@@ -355,11 +427,13 @@ def _():
         checked += 1
         if read != rhs:
             bad.append(f"{table}: read={read} ≠ {acc}+{v.get('quarantined', 0)}+{v.get('deduplicated', 0)}={rhs}")
+    if bad:
+        return False, "；".join(bad[:3])
     if checked == 0:
         return None
     return (not bad), (f"{checked} 张表等式全部成立" if not bad else "；".join(bad[:3]))
 
-@check("4对账", "两次运行 accepted 不变（幂等）")
+@check("4对账", "两次接受数一致（仅数量检查，不证明完整幂等）")
 def _():
     c = load_json(COUNTS)
     if c is None:
@@ -396,185 +470,200 @@ METRICS_CANDIDATES = [
     BATCH / "metrics" / "metrics_run.json",
     BATCH / "metrics_run.json",
 ]
-MAJOR_UNITS = ("元", "万元", "千元", "亿元", "美元")  # 主单位；最小单位（分／cent）不在其中
-
-@check("7指标", "unit 描述的是 value（同一指标里出现 10/100/1000 倍的双数值且 unit 标主单位＝错位）")
+@check("7指标", "按已确认单位契约核验数值与展示换算")
 def _():
-    d = None
-    for p in METRICS_CANDIDATES:
-        d = load_json(p)
-        if d:
-            break
-    if not d:
-        return None
-    items = d.get("metrics") if isinstance(d, dict) else d
-    if not isinstance(items, list) or not items:
-        return None
-
-    bad, checked = [], 0
-    for m in items:
-        if not isinstance(m, dict):
+    specs = CONFIG.get("unit_checks")
+    if not isinstance(specs, list) or not specs:
+        return ("SKIP", "缺 unit_checks 单位契约；不同数值之间的比值不证明单位错位")
+    d = next((load_json(p) for p in METRICS_CANDIDATES if p.is_file()), None)
+    if d is None:
+        return ("SKIP", "缺指标运行结果")
+    items = d.get("metrics", d) if isinstance(d, dict) else d
+    if isinstance(items, dict):
+        items = [{**v, "id": k} for k, v in items.items() if isinstance(v, dict)]
+    if not isinstance(items, list):
+        return ("SKIP", "无法识别指标结果结构")
+    bad = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not all(k in spec for k in ("metric", "value", "unit", "expected_unit")):
+            return ("SKIP", "单位契约须有 metric/value/unit/expected_unit")
+        if not all(isinstance(spec[k], str) and spec[k].strip() for k in ("metric", "value", "unit", "expected_unit")):
+            return ("SKIP", "单位契约的字段名与预期单位必须是非空字符串")
+        matches = [m for m in items if isinstance(m, dict) and m.get("id") == spec["metric"]]
+        if len(matches) != 1:
+            bad.append(f"{spec['metric']} 预期 1 项，实际 {len(matches)} 项")
             continue
-        unit = str(m.get("unit") or "")
-        nums = {k: v for k, v in m.items()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)}
-        if len(nums) < 2:
-            continue
-        checked += 1
-        keys = list(nums)
-        for i in range(len(keys)):
-            for j in range(i + 1, len(keys)):
-                a, b = nums[keys[i]], nums[keys[j]]
-                if not a or not b or a == b:
-                    continue
-                ratio = max(abs(a), abs(b)) / min(abs(a), abs(b))
-                for p in (10, 100, 1000):
-                    if abs(ratio - p) < 0.01 and any(u in unit for u in MAJOR_UNITS):
-                        big, small = (keys[i], keys[j]) if abs(a) > abs(b) else (keys[j], keys[i])
-                        bad.append(f"{m.get('id')}: {big}={max(abs(a), abs(b))} 与 {small}={min(abs(a), abs(b))} 差 {p} 倍，unit 却是「{unit}」")
-                        break
-    if checked == 0:
-        return None
-    if bad:
-        seen, uniq = set(), []
-        for x in bad:
-            k = x.split(":")[0]
-            if k not in seen:
-                seen.add(k); uniq.append(x)
-        return False, ("；".join(uniq[:3])
-                       + "　→ unit 只能描述 value；两个形态各带各的单位（若这两个字段本就是不同量，忽略本条）")
-    return True, f"{checked} 项含多个数值字段，未发现单位错位"
+        m = matches[0]
+        if m.get(spec["unit"]) != spec["expected_unit"]:
+            bad.append(f"{spec['metric']} 预期单位 {spec['expected_unit']}，实际 {m.get(spec['unit'])}")
+        try:
+            value = Decimal(str(m[spec["value"]]))
+            if not value.is_finite():
+                raise ValueError("非有限值")
+            if "display" in spec:
+                if not all(k in spec for k in ("display_unit", "expected_display_unit", "scale")):
+                    return ("SKIP", "展示换算须声明 display_unit/expected_display_unit/scale")
+                scale = Decimal(str(spec["scale"]))
+                if not scale.is_finite() or scale <= 0:
+                    return ("SKIP", "scale 必须是有限正数")
+                actual = Decimal(str(m[spec["display"]]))
+                if not actual.is_finite() or actual != value / scale:
+                    bad.append(f"{spec['metric']} 展示值 {actual}，契约预期 {value / scale}")
+                if m.get(spec["display_unit"]) != spec["expected_display_unit"]:
+                    bad.append(f"{spec['metric']} 展示单位不符合契约")
+        except (KeyError, InvalidOperation, ValueError, TypeError) as exc:
+            bad.append(f"{spec['metric']} 数值缺失或无效: {exc}")
+    return (not bad), ("；".join(bad[:5]) if bad else f"{len(specs)} 项单位契约一致（不涉及未配置指标）")
 
 # ---------- 辅助模式：--status 看进度 ／ --selftest 自检工具包 ----------
 def _is_archive(p: Path) -> bool:
     return "归档" in p.name or "-v1." in p.name or "-v2." in p.name or "-v3." in p.name
 
-def _looks_like_ledger(p: Path) -> bool:
-    """不靠文件名判断：内容里有『步 / 状态 / 下一步』的表头就算进度表。"""
-    try:
-        head = p.read_text(encoding="utf-8", errors="ignore")[:30000]
-    except Exception:
-        return False
-    return "| 步" in head and "状态" in head and "下一步" in head
-
-def _find_project_doc():
-    """先按常见命名找；找不到就扫当前目录所有 md，按内容识别。"""
-    named = []
-    for base in (Path.cwd(), Path.cwd().parent):
-        for pat in ("*工作手册*.md", "*进度台账*.md", "*ETL*.md"):
-            named += [p for p in sorted(base.glob(pat)) if not _is_archive(p)]
-    for p in named:
-        if _looks_like_ledger(p):
-            return p
-    for p in sorted(Path.cwd().glob("*.md")):        # 名字完全自定义时也能找到
-        if not _is_archive(p) and _looks_like_ledger(p):
-            return p
-    return named[0] if named else None
-
 def _parse_ledger(p: Path):
-    """从手册里解析台账表：返回 [[步, 名称, 状态, 判据, 产出物, 下一步], ...]"""
-    rows, inside = [], False
+    """读取第一个实际台账表，忽略示例代码块和后续空白模板。"""
+    rows, inside, fenced = [], False, False
     for line in p.read_text(encoding="utf-8").splitlines():
-        if line.startswith("|") and "步" in line and "状态" in line and "下一步" in line:
+        if line.strip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("|") and all(k in line for k in ("步", "状态", "下一步")):
+            if rows:
+                break
             inside = True
             continue
         if inside:
             if not line.startswith("|"):
-                break
+                if rows:
+                    break
+                inside = False
+                continue
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if len(cells) >= 6 and cells[0].isdigit():
                 rows.append(cells)
     return rows
 
-def show_status():
-    doc = _find_project_doc()
-    if doc is None:
-        print("没有找到项目手册或台账。")
-        print("→ 新项目：按 START-HERE.md 的 A 段开始；")
-        print("→ 已有项目：cd 到项目根（有 artifacts/ 的那一层）再跑一次。")
-        return 0
 
-    text = doc.read_text(encoding="utf-8")
-    ver = ""
-    for line in text.splitlines()[:8]:
-        if "版本" in line and "v" in line:
-            ver = line.strip().lstrip("> ").replace("**", "")
+def _find_project_doc(project: Path):
+    candidates = []
+    package = Path(__file__).parent.resolve()
+    excluded = {"README.md", "AGENTS.md", "START-HERE.md", "01-通用手册.md",
+                "02-知识库-K1-K11.md", "03-生成定制手册话术.md", "04-进度台账模板.md"}
+    for base in (project, project.parent):
+        if base.resolve() == package:
+            continue
+        for p in sorted(base.glob("*.md")):
+            if p.name in excluded or _is_archive(p):
+                continue
+            rows = _parse_ledger(p)
+            if len(rows) == 10 and sorted(int(r[0]) for r in rows) == list(range(10)) and p not in candidates:
+                candidates.append(p)
+        # 当前项目内有台账，就不再到父目录挑另一个项目。
+        if candidates:
             break
+    return candidates
+
+
+def _resolve_batch(path: Path):
+    """支持目录、软链接和一行文本指针；文本相对其所在目录解析。"""
+    seen = set()
+    for _ in range(8):
+        path = path.resolve()
+        if path in seen:
+            raise ValueError("批次指针循环")
+        seen.add(path)
+        if path.is_dir() or not path.exists():
+            return path
+        target = path.read_text(encoding="utf-8").strip()
+        if not target or len(target.splitlines()) != 1:
+            raise ValueError(f"批次文本指针须恰有一行路径: {path}")
+        next_path = Path(target)
+        path = next_path if next_path.is_absolute() else path.parent / next_path
+    raise ValueError("批次指针超过 8 层")
+
+
+def _artifact_paths(cell):
+    quoted = re.findall(r"`([^`]+)`", cell)
+    return quoted or [x.strip() for x in re.split(r"[;；]", cell) if x.strip()]
+
+
+def show_status(args):
+    project = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+    if args.ledger:
+        doc = Path(args.ledger)
+        doc = doc if doc.is_absolute() else project / doc
+        if not doc.is_file():
+            print(f"MISSING  指定台账不存在: {doc}")
+            return 2
+    else:
+        candidates = _find_project_doc(project)
+        if len(candidates) != 1:
+            print("MISSING  未找到唯一项目台账；用 --ledger 指定，脚本不会猜。")
+            for candidate in candidates:
+                print(f"  候选: {candidate}")
+            return 2
+        doc = candidates[0]
     rows = _parse_ledger(doc)
-
-    print(f"项目文档：{doc.name}")
-    if ver:
-        print(f"　{ver[:90]}")
-    if not rows:
-        print("　⚠ 没解析到台账表（表头需含『步 / 状态 / 下一步』）。")
-        return 0
-
+    if len(rows) != 10 or sorted(int(r[0]) for r in rows) != list(range(10)):
+        print(f"MISSING  {doc}: 台账必须有 0～9 各一行，实际 {len(rows)} 行")
+        return 2
+    rows.sort(key=lambda r: int(r[0]))
+    if not args.project_root and not (project / "artifacts").exists() and (doc.parent / "artifacts").exists():
+        project = doc.parent
+    print(f"项目文档：{doc}")
     done = [r for r in rows if "✅" in r[2]]
-    print(f"进度：{len(done)}/{len(rows)} 步完成")
-    print("-" * 60)
-    for r in rows:
-        mark = r[2][:2]
-        print(f"  {r[0]:>2}  {r[1]:<14} {mark}  {r[5][:30]}")
-    print("-" * 60)
-
+    print(f"台账标记完成：{len(done)}/10（路径检查不代替判据与回溯验收）")
+    problems = []
+    try:
+        pointer = Path(args.batch) if args.batch else project / "artifacts/current"
+        if args.batch and not pointer.is_absolute():
+            pointer = project / pointer
+        batch = _resolve_batch(pointer)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"MISSING  批次指针无效: {exc}")
+        return 2
+    for row in rows:
+        print(f"  {row[0]:>2}  {row[1]}  {row[2]}  {row[5]}")
+        marks = [mark for mark in ("⬜", "🟡", "✅", "⛔") if mark in row[2]]
+        if len(marks) != 1:
+            problems.append(f"第 {row[0]} 步状态无效")
+        paths = _artifact_paths(row[4])
+        if "✅" in row[2] and not paths:
+            problems.append(f"第 {row[0]} 步标记完成但没有产物路径")
+        for name in paths:
+            raw = Path(name)
+            # 项目根路径优先；批次相对路径仅使用显式批次/current，不选最新目录。
+            choices = [raw] if raw.is_absolute() else [project / raw]
+            if not raw.is_absolute() and not name.startswith("artifacts/") and batch.is_dir():
+                choices.append(batch / raw)
+            hits = {x.resolve() for x in choices if x.exists()}
+            if len(hits) != 1 and "✅" in row[2]:
+                problems.append(f"第 {row[0]} 步产物{'未能按台账路径定位' if not hits else '路径有歧义'}: {name}")
+    if problems:
+        for problem in problems:
+            print(f"MISSING  {problem}")
+        print("下一步：先核对这些完成标记，不能据此宣布交付完成。")
+        return 2
     pending = next((r for r in rows if "✅" not in r[2]), None)
     if pending is None:
-        print("下一步：十步已全部完成 → 做交付与复盘（或按变更记录继续维护）。")
-        return 0
-
-    step = int(pending[0])
-    paths = [s.strip("` ") for s in pending[4].replace("；", ";").split(";") if s.strip()]
-
-    # 产出物列常混两种写法：全路径 artifacts/<批次>/x，和相对批次简写 profile/x。
-    # 先从业已出现的全路径里推出批次前缀，再拿它去补简写；都对不上才算缺。
-    prefix = None
-    for pth in paths:
-        m = re.match(r"^(artifacts/[^/]+)/", pth)
-        if m:
-            prefix = m.group(1)
-            break
-    if prefix is None:
-        cands = sorted((Path.cwd() / "artifacts").glob("*"), key=lambda x: x.stat().st_mtime, reverse=True) \
-            if (Path.cwd() / "artifacts").is_dir() else []
-        if cands:
-            prefix = f"artifacts/{cands[0].name}"
-
-    def resolve(pth):
-        tries = [Path(pth)]
-        if prefix and not pth.startswith("artifacts/"):
-            tries.append(Path(prefix) / pth)
-        return next((t for t in tries if t.exists()), None)
-
-    shown = []
-    for pth in paths:
-        hit = resolve(pth)
-        shown.append((hit.as_posix() if hit else pth, bool(hit)))
-    present = [x for x, ok in shown if ok]
-    missing = [x for x, ok in shown if not ok]
-
-    if "⬜" in pending[2]:
-        cmd = ("C0-B ＋ C0-T（建批次目录与 run.json；若台账没写先补 C0-A）"
-               if step == 0 else f"C{step}-A ＋ C{step}-A2")
-        print(f"下一步：第 {step} 步「{pending[1]}」还没开始 → 发 {cmd}")
+        print("下一步：台账十步均标记完成，所列路径存在；仍须核对判据和回溯件。")
     elif "⛔" in pending[2]:
-        print(f"下一步：第 {step} 步「{pending[1]}」阻塞 {pending[2].lstrip('⛔').strip()}")
-        print("　先解决缺件／等回话，不要往下推进。")
-    else:  # 🟡 进行中
-        print(f"下一步：第 {step} 步「{pending[1]}」进行中")
-        if missing:
-            print(f"　产物还没齐（缺 {len(missing)} 个）→ 先把第 {step} 步做完，别急着发下一步")
-        else:
-            print("　产物已在 → 对照定制手册的验收节补跑断言、勾判据；勾满再发 " + pending[5])
-
-    for pth, ok in shown:
-        print(f"　预期产物：{pth}  {'✓ 在' if ok else '✗ 不存在'}")
+        print(f"下一步：第 {pending[0]} 步阻塞 {pending[2]}；先解决缺件或等回话。")
+    elif "⬜" in pending[2]:
+        step = int(pending[0])
+        cmd = "C0-A（已有数据台账则 C0-B ＋ C0-T）" if step == 0 else f"C{step}-A ＋ C{step}-A2"
+        print(f"下一步：第 {step} 步未开始 → 发 {cmd}")
+    else:
+        print(f"下一步：第 {pending[0]} 步进行中；先按该步判据验收，完成后再发 {pending[5]}。")
     return 0
+
 
 def selftest():
     base = Path(__file__).parent
     need = ["README.md", "START-HERE.md", "AGENTS.md", "01-通用手册.md",
             "02-知识库-K1-K11.md", "03-生成定制手册话术.md", "04-进度台账模板.md",
-            "check.py", "全景图-十步.svg", "LICENSE"]
+            "check.py", "test_check.py", "check-config.example.json", "全景图-十步.svg", "LICENSE"]
     must_have = {
         "README.md": ["先看清，再动手", "行数对，不等于值对", "不知道的不估算", "第一次用：头一小时怎么过",
                       "按它的 AGENTS.md 执行"],
@@ -627,64 +716,108 @@ def selftest():
     if not ver_ok:
         fails.append("版本号")
 
+    regression = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(base), "-p", "test_check.py", "-v"],
+        cwd=base, capture_output=True, text=True, timeout=120)
+    regression_output = regression.stderr + regression.stdout
+    count = re.search(r"Ran (\d+) tests?", regression_output)
+    regression_ok = regression.returncode == 0 and count and int(count[1]) > 0
+    print(f"{'PASS' if regression_ok else 'FAIL'}  行为回归（临时合成材料）")
+    print(regression_output.strip())
+    if not regression_ok:
+        fails.append("行为回归")
+
     print("-" * 60)
     print("结果:", "全部通过" if not fails else f"{len(fails)} 项有问题：{fails}")
     return 1 if fails else 0
 
-# ---------- 跑灯表 ----------
-def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "--status":
-        sys.exit(show_status())
-    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
-        sys.exit(selftest())
+# ---------- 命令入口 ----------
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="ETL 批次检查与台账导航；缺件不算通过")
+    parser.add_argument("batch", nargs="?", help="批次目录或文本/软链接指针")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--status", action="store_true")
+    mode.add_argument("--selftest", action="store_true")
+    parser.add_argument("--stage", type=int, choices=range(10), help="验收范围：只验这一阶段的内置检查")
+    parser.add_argument("--project-root", help="项目根，原始区默认为其 data/raw")
+    parser.add_argument("--ledger", help="指定台账；相对项目根")
+    parser.add_argument("--config", help="检查配置 JSON；相对项目根，默认 check_config.json（若存在）")
+    return parser.parse_args(argv)
 
-    if not BATCH.exists():
-        print(f"✗ 批次目录不存在：{BATCH}")
-        print("  用法：python3 check.py <批次目录>，例：artifacts/b01-20261113")
-        print("  不知道批次在哪：python3 check.py --status")
-        sys.exit(2)
 
-    markers = ("run.json", "profile", "cleaning", "reports", "reconcile", "metrics", "delivery")
-    if not any((BATCH / m).exists() for m in markers):
-        print(f"✗ 这个目录不像批次目录（没有 {'／'.join(markers)} 中任何一个）：{BATCH}")
-        subs = sorted(p.name for p in BATCH.iterdir() if p.is_dir())[:6]
-        if subs:
-            print(f"  它下面有：{subs}")
-            print("  是不是想传其中某一个？例：artifacts/<批次名>")
-        sys.exit(2)
+def configure(args):
+    global BATCH, ROOT, RAW_DIR, CONFIG, RUN_JSON, PROFILE_CANDIDATES
+    global DIAG_CANDIDATES, RULES, COUNTS, SECOND, RECON, COVER_CANDIDATES, METRICS_CANDIDATES
+    project = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+    raw_batch = Path(args.batch or "artifacts/current")
+    BATCH = _resolve_batch(raw_batch if raw_batch.is_absolute() else project / raw_batch)
+    ROOT = project if args.project_root else _find_project_root(BATCH)
+    RAW_DIR = ROOT / "data/raw"
+    config_path = Path(args.config) if args.config else project / "check_config.json"
+    if not config_path.is_absolute():
+        config_path = project / config_path
+    if args.config and not config_path.is_file():
+        raise ValueError(f"指定配置不存在: {config_path}")
+    CONFIG = load_json(config_path) if config_path.is_file() else {}
+    if not isinstance(CONFIG, dict):
+        raise ValueError("检查配置必须是 JSON 对象")
+    unknown = set(CONFIG) - {"field_checks", "unit_checks"}
+    if unknown:
+        raise ValueError(f"未知配置键: {sorted(unknown)}")
+    RUN_JSON = BATCH / "run.json"
+    PROFILE_CANDIDATES = [BATCH / x for x in ("profile/profile_report.json", "reports/profile_report.json", "profile_report.json")]
+    DIAG_CANDIDATES = [BATCH / x for x in ("reports/diagnosis.md", "reports/diagnosis/diagnosis.md", "diagnosis.md")]
+    RULES = BATCH / "cleaning/cleaning_rules.yaml"
+    COUNTS = BATCH / "reconcile/counts.json"
+    SECOND = BATCH / "reconcile/second_run_accepted.txt"
+    RECON = BATCH / "reports/reconciliation.json"
+    COVER_CANDIDATES = [BATCH / x for x in ("reports/coverage_notes.md", "reports/coverage.md")]
+    METRICS_CANDIDATES = [BATCH / x for x in ("reports/metrics_run.json", "metrics/metrics_run.json", "metrics_run.json")]
 
-    fails = passed = skipped = 0
-    print(f"批次: {BATCH}")
-    print("-" * 64)
-    for stage, name, fn in CHECKS:
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.selftest:
+        return selftest()
+    if args.status:
+        return show_status(args)
+    try:
+        configure(args)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"MISSING  无法确定检查输入: {exc}")
+        return 2
+    if not BATCH.is_dir():
+        print(f"MISSING  批次目录不存在: {BATCH}")
+        return 2
+    selected = [(stage, name, fn) for stage, name, fn in CHECKS
+                if args.stage is None or int(str(stage)[0]) == args.stage]
+    if not selected:
+        print(f"MISSING  第 {args.stage} 步没有内置断言，需要项目检查或人工验收")
+        return 2
+    fails = passed = missing = 0
+    print(f"批次: {BATCH}；范围: {'巡检（不代表整体验收）' if args.stage is None else '第 ' + str(args.stage) + ' 步内置检查'}")
+    for stage, name, fn in selected:
         try:
             r = fn()
-        except Exception as e:
-            r = (False, f"断言自身报错: {e}")
-        if r is None:
-            status, detail = "SKIP", "产物未生成（到这一步再跑）"
-        elif isinstance(r, tuple) and len(r) == 2 and r[0] == "SKIP":
-            status, detail = "SKIP", r[1]
+        except Exception as exc:
+            r = ("SKIP", f"无法执行检查: {exc}")
+        if r is None or (isinstance(r, tuple) and r[0] == "SKIP"):
+            missing += 1
+            detail = r[1] if r else "必需产物未找到或条件不足"
+            print(f"MISSING  {stage}  {name}  {detail}")
         else:
             ok, detail = r
-            status = "PASS" if ok else "FAIL"
-            if ok:
-                passed += 1
-            else:
-                fails += 1
-        if status == "SKIP":
-            skipped += 1
-        print(f"{status:4}  {stage}  {name}  {detail}")
-    print("-" * 64)
-    if fails:
-        print("结果:", f"{fails} 条 FAIL，打回重做")
-    elif passed == 0:
-        print(f"⚠ 0 条通过、{skipped} 条跳过——**没有任何断言真正执行**")
-        print("  多半是产物还没生成，或者路径指到了别的批次。先跑 --status 确认。")
-        sys.exit(2)
-    else:
-        print("结果:", f"{passed} 条通过" + (f"、{skipped} 条跳过（未到那一步）" if skipped else ""))
-    sys.exit(1 if fails else 0)
+            passed += bool(ok)
+            fails += not ok
+            print(f"{'PASS' if ok else 'FAIL'}  {stage}  {name}  {detail}")
+    print(f"结果: {passed} 条通过、{fails} 条冲突、{missing} 条未完成验证。")
+    print("内置检查不代替项目完整判据、记录级去向和人工验收。")
+    return 1 if fails else 2 if missing or not passed else 0
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"MISSING  输入无法读取: {exc}")
+        sys.exit(2)
